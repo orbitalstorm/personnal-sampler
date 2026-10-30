@@ -1,22 +1,30 @@
-# PulsePad 16 — Personal Sampler 4×4 (`v1.0.0`)
+# LifeSampler — L'Enregistreur Bruiteur de la Vie (`v1.1.0`)
 
-Application mobile Android développée en **Flutter** (`cloud.orbital8.personnal_sampler`) transformant le téléphone en un **sampleur 16 cases (grille 4×4)** avec assignation par **enregistrement microphone** ou **import de fichier WAV/audio depuis l'appareil**, éditeur de forme d'onde et lecture multi-trigger instantanée.
+Application mobile Android développée en **Flutter** (`cloud.orbital8.personnal_sampler`) transformant votre smartphone en un **enregistreur bruiteur de la vie 16 cases (grille 4×4)**, verrouillé en **mode portrait**, pour capturer les sons du quotidien (rire de bébé, réplique du boss, porte qui grince), les découper, les exporter en `.WAV` et les rejouer à volonté.
 
-## Fonctionnalités Principales (`v1.0.0`)
+## Nouveautés & Philosophie (`v1.1.0`)
 
-1. **Grille 4×4 (16 Cases) Haute Réactivité** :
-   - 16 pads (`PAD 01` à `PAD 16`) visibles simultanément sur un seul écran ;
-   - Appui illimité sur chaque touche pour rejouer le son autant de fois que souhaité (`SoundPool` 32 voix basse latence + `MediaPlayer`).
-2. **Bouton `RECORD` — 2 Sources d'Assignation + Kit Studio** :
-   - **Enregistrer avec le Micro** : capture PCM 16-bit 44.1 kHz en direct avec VU-mètre temps réel ;
-   - **Fichier WAV / Audio depuis l'appareil** : import natif Android (`.wav`, `.mp3`, `.m4a`, `.aac`, `.ogg`) ;
-   - **Kit Studio 808 intégré** : 16 instruments synthétisés prêts à l'emploi sur la `Banque A`.
-3. **Fonctionnalités Studio Complètes (Analyse Produit)** :
-   - **Auto-Trim Silence & Normalisation Micro** : supprime automatiquement le silence au début d'un enregistrement micro pour une attaque immédiate sans retard ;
-   - **Découpe Waveform (`Trim Début / Fin`)** : aperçu graphique de l'onde sonore sur chaque pad et découpe précise avec fondu anti-clic ;
-   - **Modes `CUT` (Redéclencher), `POLY` (Superposer), `LOOP` (Boucle continue)** et bouton global **`STOP`** ;
-   - **Contrôles par Pad** : Volume (`0–150%`), Pitch / Vitesse (`0.5×–2.0×`), Nom personnalisé, 16 couleurs néon, Export `.wav` (`Music/PersonalSampler/`) ;
-   - **4 Banques Persistées (`BANK A..D`)**, **Métronome (`40–220 BPM` + `TAP`)** et **Séquenceur / Looper Live (`REC SEQ`)**.
+1. **Splash Screen Cartoon (Illustration par Leonardo)** :
+   - Écran d'accueil au démarrage présentant l'univers cartoon de **LifeSampler** et sa philosophie : capturer et rejouer les sons de la vie pour le plaisir et le fun.
+2. **Mode Portrait Verrouillé** :
+   - L'application reste toujours en mode portrait (`portraitUp`) sans bascule en mode paysage.
+3. **Priorité aux Sons de la Vie (`Banques A, B & C`) & Banque Studio (`Banque D`)** :
+   - **Banques A, B et C (`Vie 1`, `Vie 2`, `Vie 3`)** : 3 banques de 16 pads dédiées à vos propres enregistrements micro et fichiers audio, sans encombrement de console BPM ;
+   - **Banque D (`Studio`)** : regroupe les 16 sons synthétisés du Kit Studio 808 ainsi que la **console BPM global (`40–220 BPM`, `TAP`) et le Séquenceur / Looper (`REC SEQ`, `LOOP`)**.
+4. **Fenêtre « Éditer » Épurée & Export Direct `.WAV`** :
+   - Capture Microphone PCM 16-bit 44.1 kHz ou import de fichier audio ;
+   - Boutons **`Auto-Trim`** et **`Booster Micro`** regroupés sur la **même ligne** ;
+   - Suppression des pré-réglages Studio dans la fenêtre Éditer pour ne jamais écraser par erreur un son qui vient d'être enregistré ;
+   - Découpe sur **forme d'onde (`Waveform`)**, réglages de mode (`CUT`, `POLY`, `LOOP`), Volume (`0–150%`), Pitch (`0.5×–2.0×`), Nom & Couleur néon ;
+   - Bouton **`EXPORTER (.WAV)`** directement intégré dans la fenêtre Éditer (`Music/LifeSampler/`).
+
+## Captures d'écran validées (`1080×2400` Portrait)
+
+- `screenshots/01_splash_screen.png` — Splash Screen avec l'illustration cartoon de Leonardo
+- `screenshots/02_main_bank_a_life.png` — Grille 4×4 Banque A (Sons de la vie, sans barre BPM)
+- `screenshots/03_edit_pad_window.png` — Fenêtre Éditer un pad (`Auto-Trim` + `Booster Micro` sur la même ligne, `EXPORTER (.WAV)` intégré, sans presets studio)
+- `screenshots/04_bank_d_studio_bpm.png` — Grille 4×4 Banque D (Sons Studio 808 + Console BPM global)
+- `screenshots/05_guide_dialog.png` — Fenêtre Guide LifeSampler
 
 ## Commandes de développement
 

@@ -394,6 +394,8 @@ class SamplerBank {
   final String subtitle;
   final List<SamplerPad> pads;
 
+  bool get isStudioBank => id == 'D';
+
   int get assignedCount => pads.where((SamplerPad p) => p.hasSound).length;
 
   SamplerBank copyWithPad(SamplerPad updatedPad) {
@@ -460,10 +462,13 @@ class SamplerBank {
     );
   }
 
-  /// Banque A pré-chargée avec les 16 sons du Kit Studio 808 pour jouer immédiatement.
+  /// Banque D pré-chargée avec les 16 sons du Kit Studio 808.
   factory SamplerBank.createStudio808Bank({
     required List<List<double>> defaultWaveforms,
     required List<int> defaultDurationsMs,
+    String id = 'D',
+    String name = 'BANQUE D',
+    String subtitle = 'Banque Studio 808 (16 Sons)',
   }) {
     const presets = SynthPresetKind.values;
     final pads = List<SamplerPad>.generate(16, (int index) {
@@ -484,9 +489,9 @@ class SamplerBank {
     }, growable: false);
 
     return SamplerBank(
-      id: 'A',
-      name: 'BANQUE A',
-      subtitle: 'Kit Studio 808 (16 Pads)',
+      id: id,
+      name: name,
+      subtitle: subtitle,
       pads: pads,
     );
   }

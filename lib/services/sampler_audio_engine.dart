@@ -592,7 +592,7 @@ class SamplerAudioEngine {
     return updated;
   }
 
-  /// Exporte l'échantillon WAV d'un pad dans le dossier `Music/PersonalSampler/` du téléphone.
+  /// Exporte l'échantillon WAV d'un pad dans le dossier `Music/LifeSampler/` du téléphone.
   Future<String> exportPadWavToDevice(SamplerPad pad) async {
     final path = resolvePlayablePath(pad);
     Uint8List bytes;
@@ -609,23 +609,25 @@ class SamplerAudioEngine {
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
         .replaceAll(RegExp(r'^_+|_+$'), '');
-    final fileName = 'pulsepad_${(pad.id + 1).toString().padLeft(2, '0')}_$safeLabel.wav';
+    final fileName = 'lifesampler_${(pad.id + 1).toString().padLeft(2, '0')}_$safeLabel.wav';
 
-    try {
-      final savedLocation = await _channel.invokeMethod<String>(
-        'exportPadWav',
-        <String, dynamic>{
-          'bytes': bytes,
-          'fileName': fileName,
-        },
-      );
-      if (savedLocation != null && savedLocation.isNotEmpty) {
-        return savedLocation;
+    if (_nativeChannelAvailable) {
+      try {
+        final savedLocation = await _channel.invokeMethod<String>(
+          'exportPadWav',
+          <String, dynamic>{
+            'bytes': bytes,
+            'fileName': fileName,
+          },
+        );
+        if (savedLocation != null && savedLocation.isNotEmpty) {
+          return savedLocation;
+        }
+      } on MissingPluginException {
+        _nativeChannelAvailable = false;
+      } on PlatformException {
+        // Fallback
       }
-    } on MissingPluginException {
-      // Fallback local en test
-    } on PlatformException {
-      // Fallback
     }
 
     final baseDir = await _resolveStorageDir();
@@ -638,9 +640,9 @@ class SamplerAudioEngine {
   Future<void> saveBanks(List<SamplerBank> banks) async {
     try {
       final baseDir = await _resolveStorageDir();
-      final stateFile = File('${baseDir.path}/sampler_banks_v1.json');
+      final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
       final payload = jsonEncode(<String, dynamic>{
-        'version': 1,
+        'version': 2,
         'banks': banks.map((SamplerBank b) => b.toJson()).toList(growable: false),
       });
       stateFile.writeAsStringSync(payload, flush: true);
@@ -658,7 +660,7 @@ class SamplerAudioEngine {
 
     try {
       final baseDir = await _resolveStorageDir();
-      final stateFile = File('${baseDir.path}/sampler_banks_v1.json');
+      final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
       if (!stateFile.existsSync()) {
         return defaultBanks;
       }
@@ -708,11 +710,14 @@ class SamplerAudioEngine {
     required List<List<double>> defaultWaveforms,
     required List<int> defaultDurations,
   }) {
-    final bankA = SamplerBank.createStudio808Bank(
+    final bankD = SamplerBank.createStudio808Bank(
       defaultWaveforms: defaultWaveforms,
       defaultDurationsMs: defaultDurations,
+      id: 'D',
+      name: 'BANQUE D',
+      subtitle: 'Banque Studio 808 (16 Sons)',
     );
-    final hydratedPadsA = bankA.pads.map((SamplerPad p) {
+    final hydratedPadsD = bankD.pads.map((SamplerPad p) {
       final presetPath = p.synthPreset != null ? _presetFilePaths[p.synthPreset!] : null;
       return p.copyWith(
         filePath: presetPath,
@@ -721,22 +726,22 @@ class SamplerAudioEngine {
     }).toList(growable: false);
 
     return <SamplerBank>[
-      bankA.copyWith(pads: hydratedPadsA),
+      SamplerBank.createEmptyBank(
+        id: 'A',
+        name: 'BANQUE A',
+        subtitle: 'Sons de la Vie 1 — Micro & Audio',
+      ),
       SamplerBank.createEmptyBank(
         id: 'B',
         name: 'BANQUE B',
-        subtitle: 'Custom Micro & WAV 1',
+        subtitle: 'Sons de la Vie 2 — Fun & Rires',
       ),
       SamplerBank.createEmptyBank(
         id: 'C',
         name: 'BANQUE C',
-        subtitle: 'Custom Micro & WAV 2',
+        subtitle: 'Sons de la Vie 3 — Bruitages',
       ),
-      SamplerBank.createEmptyBank(
-        id: 'D',
-        name: 'BANQUE D',
-        subtitle: 'Custom Micro & WAV 3',
-      ),
+      bankD.copyWith(pads: hydratedPadsD),
     ];
   }
 

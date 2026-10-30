@@ -627,7 +627,7 @@ class MainActivity : FlutterActivity() {
                 put(MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
                 put(
                     MediaStore.Audio.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_MUSIC + "/PersonalSampler"
+                    Environment.DIRECTORY_MUSIC + "/LifeSampler"
                 )
                 put(MediaStore.Audio.Media.IS_PENDING, 1)
             }
@@ -640,11 +640,11 @@ class MainActivity : FlutterActivity() {
             values.clear()
             values.put(MediaStore.Audio.Media.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            return "Music/PersonalSampler/$cleanName"
+            return "Music/LifeSampler/$cleanName"
         } else {
             val dir = File(
                 applicationContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC),
-                "PersonalSampler"
+                "LifeSampler"
             )
             if (!dir.exists()) {
                 dir.mkdirs()

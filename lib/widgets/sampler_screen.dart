@@ -8,14 +8,16 @@ import '../services/sampler_audio_engine.dart';
 import 'pad_assignment_sheet.dart';
 import 'waveform_painter.dart';
 
-/// Écran principal du sampleur 4x4 (16 cases) PulsePad 16.
+/// Écran principal de LifeSampler (« L'enregistreur bruiteur de la vie ») — grille 4x4 (16 cases).
 class SamplerScreen extends StatefulWidget {
   const SamplerScreen({
     super.key,
     this.audioEngine,
+    this.onShowSplash,
   });
 
   final SamplerAudioEngine? audioEngine;
+  final VoidCallback? onShowSplash;
 
   @override
   State<SamplerScreen> createState() => _SamplerScreenState();
@@ -44,14 +46,14 @@ class _SamplerScreenState extends State<SamplerScreen> {
   /// Dernier pad déclenché (pour affichage dans le moniteur LCD supérieur).
   SamplerPad? _lastTriggeredPad;
 
-  /// Métronome
+  /// Métronome (uniquement sur la Banque D Studio)
   bool _metronomeActive = false;
   int _bpm = 120;
   int _currentBeat = 0;
   Timer? _metronomeTimer;
   final List<DateTime> _tapTempoTimestamps = <DateTime>[];
 
-  /// Séquenceur / Looper de performance live
+  /// Séquenceur / Looper de performance live (Banque D Studio)
   bool _isRecordingSeq = false;
   bool _isPlayingSeq = false;
   DateTime? _seqStartTime;
@@ -74,9 +76,9 @@ class _SamplerScreenState extends State<SamplerScreen> {
   Future<void> _initSampler() async {
     final loadedBanks = await _engine.initialize();
     if (!mounted) return;
-    // N'écrase pas les banques en mémoire si l'utilisateur a déjà commencé à jouer
     final hasUserActivity = _banks.any(
-      (SamplerBank b) => b.pads.any((SamplerPad p) => p.triggerCount > 0),
+      (SamplerBank b) =>
+          b.pads.any((SamplerPad p) => p.triggerCount > 0 || (!b.isStudioBank && p.hasSound)),
     );
     if (!hasUserActivity) {
       setState(() {
@@ -120,12 +122,22 @@ class _SamplerScreenState extends State<SamplerScreen> {
       return;
     }
     await _engine.stopAllPads();
+    final targetBank = _banks[index];
+    if (!targetBank.isStudioBank) {
+      _metronomeTimer?.cancel();
+      _stopSequenceTimers();
+    }
     setState(() {
       _activeBankIndex = index;
       _loopingPads.clear();
-      _lastTriggeredPad = _banks[index].pads.first;
+      if (!targetBank.isStudioBank) {
+        _metronomeActive = false;
+        _isRecordingSeq = false;
+        _isPlayingSeq = false;
+      }
+      _lastTriggeredPad = targetBank.pads.first;
     });
-    await _engine.preloadBank(_banks[index]);
+    await _engine.preloadBank(targetBank);
   }
 
   Future<void> _handlePadTap(SamplerPad pad) async {
@@ -145,7 +157,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
   Future<void> _firePad(SamplerPad pad, {required bool recordToLooper}) async {
     if (!pad.hasSound) return;
 
-    // Illumination visuelle instantanée + incrément du compteur d'appuis
     _flashTimers[pad.id]?.cancel();
     final updatedPad = pad.copyWith(triggerCount: pad.triggerCount + 1);
     final updatedBank = _currentBank.copyWithPad(updatedPad);
@@ -234,7 +245,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
   void _changeBpm(int delta) {
     setState(() {
       _bpm = (_bpm + delta).clamp(40, 220);
-      // Ajuster la durée d'une mesure 4/4 pour le séquenceur live
       _seqLoopLengthMs = ((60000.0 / _bpm) * 4.0).round();
     });
     if (_metronomeActive) {
@@ -289,7 +299,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
 
   void _toggleSeqRecording() {
     if (_isRecordingSeq) {
-      // Fin de l'enregistrement de la boucle -> passe en lecture automatique
       final elapsed = _seqStartTime != null
           ? DateTime.now().difference(_seqStartTime!).inMilliseconds
           : 2000;
@@ -374,7 +383,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
 
   Future<void> _resetCurrentBank() async {
     await _engine.stopAllPads();
-    final freshBanks = await SamplerAudioEngine().initialize();
+    final freshBanks = _engine.buildDefaultBanksSync();
     if (!mounted) return;
     setState(() {
       _banks = List<SamplerBank>.generate(
@@ -393,19 +402,21 @@ class _SamplerScreenState extends State<SamplerScreen> {
       context: context,
       builder: (BuildContext ctx) {
         return AlertDialog(
+          key: const Key('features_guide_dialog'),
           backgroundColor: const Color(0xFF141826),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: const Row(
             children: <Widget>[
-              Icon(Icons.grid_view_rounded, color: Color(0xFFEF4444)),
+              Icon(Icons.mic_external_on_rounded, color: Color(0xFF10B981)),
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'PulsePad 16 — Guide & Features',
+                  'LifeSampler — Guide',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ),
@@ -417,37 +428,83 @@ class _SamplerScreenState extends State<SamplerScreen> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 _FeatureGuideItem(
-                  title: '1. Grille 4×4 (16 Cases) Ultra-Réactive',
+                  title: '1. Bruiteur de la Vie (Banques A–C)',
                   body:
-                      'Appuyez sur n’importe quelle case autant de fois que vous le souhaitez pour jouer et rejouer le son instantanément.',
+                      'Capturez les sons du quotidien (rire de bébé, réplique du boss, porte qui grince) sur 16 pads colorés et rejouez-les à volonté.',
                 ),
                 _FeatureGuideItem(
-                  title: '2. Bouton RECORD (Micro ou Fichier WAV)',
+                  title: '2. Capture Micro (Auto-Trim & Booster)',
                   body:
-                      'Appuyez sur RECORD puis touchez l’une des 16 cases pour enregistrer un son avec le microphone ou récupérer un fichier WAV/audio depuis votre téléphone.',
+                      'Touchez une case vide ou appuyez sur RECORD : l’Auto-Trim coupe le silence initial et le Booster égalise le volume.',
                 ),
                 _FeatureGuideItem(
-                  title: '3. Auto-Trim Silence & Découpe Waveform',
+                  title: '3. Découpe Waveform & Export WAV',
                   body:
-                      'Coupe automatiquement le silence au début des enregistrements micro (0 ms de retard) et permet d’ajuster le Début/Fin sur la forme d’onde.',
+                      'Dans la fenêtre Éditer, découpez la forme d’onde, réglez le pitch/volume et exportez votre son en .WAV dans Music/LifeSampler.',
                 ),
                 _FeatureGuideItem(
-                  title: '4. Modes CUT / POLY / LOOP + Pitch & Volume',
+                  title: '4. Banque D Studio & BPM Global',
                   body:
-                      'Choisissez par case entre Cut (redéclenchement net), Poly (superposition) ou Loop (boucle continue), et réglez le Volume (0–150%) et le Pitch (0.5×–2.0×).',
-                ),
-                _FeatureGuideItem(
-                  title: '5. 4 Banques Persistées + Métronome & Looper',
-                  body:
-                      'La Banque A contient 16 sons Studio 808 prêts à jouer, les Banques B/C/D accueillent vos créations personnelles, et le Séquenceur enregistre vos boucles en direct.',
+                      'La Banque D regroupe les 16 sons synthétisés Studio 808 ainsi que le contrôle de BPM et le Looper rythmique.',
                 ),
               ],
             ),
           ),
           actions: <Widget>[
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('COMPRIS'),
+            Row(
+              children: <Widget>[
+                if (widget.onShowSplash != null) ...<Widget>[
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        widget.onShowSplash!();
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF38BDF8),
+                        side: const BorderSide(color: Color(0xFF38BDF8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: const Text(
+                        'SPLASH SCREEN',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('close_guide_dialog_button'),
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      foregroundColor: const Color(0xFF05130E),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text(
+                      'FERMER',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         );
@@ -461,7 +518,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
       return const Scaffold(
         backgroundColor: Color(0xFF0B0D14),
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFFEF4444)),
+          child: CircularProgressIndicator(color: Color(0xFF10B981)),
         ),
       );
     }
@@ -476,15 +533,15 @@ class _SamplerScreenState extends State<SamplerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 1. EN-TÊTE STUDIO & MONITEUR LCD
+              // 1. EN-TÊTE LIFESAMPLER & MONITEUR D'ACTIVITÉ
               _buildTopHeader(bank),
               const SizedBox(height: 6),
 
-              // 2. SÉLECTEUR DES 4 BANQUES (A / B / C / D)
+              // 2. SÉLECTEUR DES 4 BANQUES (A / B / C : VIE • D : STUDIO)
               _buildBankSelectorRow(),
               const SizedBox(height: 6),
 
-              // 3. BARRE DE COMMANDE PRINCIPALE : BOUTON RECORD / ÉDITER / STOP
+              // 3. BARRE DE COMMANDE PRINCIPALE : RECORD / ÉDITER / STOP
               _buildPrimaryTransportBar(),
               const SizedBox(height: 6),
 
@@ -498,10 +555,12 @@ class _SamplerScreenState extends State<SamplerScreen> {
               Expanded(
                 child: _buildPadGrid4x4(bank),
               ),
-              const SizedBox(height: 6),
 
-              // 6. CONSOLE RYTHMIQUE INFÉRIEURE (MÉTRONOME BPM + SÉQUENCEUR LOOPER)
-              _buildBottomRhythmConsole(),
+              // 6. CONSOLE BPM GLOBAL & SÉQUENCEUR (AFFICHÉE UNIQUEMENT SUR LA BANQUE D STUDIO)
+              if (bank.isStudioBank) ...<Widget>[
+                const SizedBox(height: 6),
+                _buildBottomRhythmConsole(),
+              ],
             ],
           ),
         ),
@@ -520,21 +579,24 @@ class _SamplerScreenState extends State<SamplerScreen> {
       ),
       child: Row(
         children: <Widget>[
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: <Color>[Color(0xFFEF4444), Color(0xFFF97316)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+          GestureDetector(
+            onTap: widget.onShowSplash,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: <Color>[Color(0xFF10B981), Color(0xFF38BDF8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(9),
               ),
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: const Icon(
-              Icons.grid_4x4_rounded,
-              color: Colors.white,
-              size: 20,
+              child: const Icon(
+                Icons.mic_external_on_rounded,
+                color: Color(0xFF06130E),
+                size: 20,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -546,7 +608,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
                   children: <Widget>[
                     const Flexible(
                       child: Text(
-                        'PULSEPAD 16',
+                        'LIFESAMPLER',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -560,19 +622,25 @@ class _SamplerScreenState extends State<SamplerScreen> {
                     const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
+                        horizontal: 6,
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white10,
+                        color: bank.isStudioBank
+                            ? const Color(0xFFA855F7).withValues(alpha: 0.22)
+                            : const Color(0xFF10B981).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(5),
                       ),
                       child: Text(
-                        '${bank.assignedCount}/16',
-                        style: const TextStyle(
-                          color: Colors.white70,
+                        bank.isStudioBank
+                            ? 'STUDIO • ${bank.assignedCount}/16'
+                            : 'VIE • ${bank.assignedCount}/16',
+                        style: TextStyle(
+                          color: bank.isStudioBank
+                              ? const Color(0xFFD8B4FE)
+                              : const Color(0xFF6EE7B7),
                           fontSize: 9,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),
@@ -580,7 +648,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
                 ),
                 Text(
                   lastPad != null && lastPad.hasSound
-                      ? '${lastPad.padNumberLabel} • ${lastPad.label} (${lastPad.source.labelFr} • ${lastPad.effectiveDurationMs} ms • ×${lastPad.triggerCount})'
+                      ? '${lastPad.padNumberLabel} • ${lastPad.label} • ${lastPad.effectiveDurationMs} ms'
                       : bank.subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -606,7 +674,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
           IconButton(
             key: const Key('features_help_button'),
             onPressed: _showFeaturesGuideDialog,
-            tooltip: 'Guide & Fonctionnalités',
+            tooltip: 'Guide LifeSampler',
             visualDensity: VisualDensity.compact,
             icon: const Icon(
               Icons.info_outline_rounded,
@@ -624,6 +692,9 @@ class _SamplerScreenState extends State<SamplerScreen> {
       children: List<Widget>.generate(_banks.length, (int idx) {
         final b = _banks[idx];
         final selected = idx == _activeBankIndex;
+        final isStudio = b.isStudioBank;
+        final accent =
+            isStudio ? const Color(0xFFA855F7) : const Color(0xFF38BDF8);
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(
@@ -635,16 +706,14 @@ class _SamplerScreenState extends State<SamplerScreen> {
               borderRadius: BorderRadius.circular(9),
               onTap: () => _switchBank(idx),
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
                 decoration: BoxDecoration(
                   color: selected
                       ? const Color(0xFF232942)
                       : const Color(0xFF131724),
                   borderRadius: BorderRadius.circular(9),
                   border: Border.all(
-                    color: selected
-                        ? const Color(0xFF38BDF8)
-                        : Colors.white12,
+                    color: selected ? accent : Colors.white12,
                     width: selected ? 1.5 : 1.0,
                   ),
                 ),
@@ -652,18 +721,22 @@ class _SamplerScreenState extends State<SamplerScreen> {
                   children: <Widget>[
                     Text(
                       'BANK ${b.id}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: selected
-                            ? const Color(0xFF38BDF8)
-                            : Colors.white70,
+                        color: selected ? accent : Colors.white70,
                         fontWeight: FontWeight.w900,
                         fontSize: 11,
                       ),
                     ),
                     Text(
-                      '${b.assignedCount}/16',
-                      style: const TextStyle(
-                        color: Colors.white38,
+                      isStudio
+                          ? 'Studio • ${b.assignedCount}/16'
+                          : 'Vie ${idx + 1} • ${b.assignedCount}/16',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected ? Colors.white70 : Colors.white38,
                         fontSize: 9,
                         fontWeight: FontWeight.w700,
                       ),
@@ -683,48 +756,51 @@ class _SamplerScreenState extends State<SamplerScreen> {
       children: <Widget>[
         // BOUTON RECORD PRINCIPAL
         Expanded(
-          flex: 5,
-          child: ElevatedButton.icon(
-            key: const Key('record_mode_button'),
-            onPressed: () {
-              setState(() {
-                _isRecordMode = !_isRecordMode;
-                if (_isRecordMode) {
-                  _isEditMode = false;
-                }
-              });
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _isRecordMode
-                  ? const Color(0xFFDC2626)
-                  : const Color(0xFF991B1B),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(11),
-                side: BorderSide(
-                  color: _isRecordMode
-                      ? Colors.white
-                      : const Color(0xFFEF4444),
-                  width: _isRecordMode ? 2.0 : 1.2,
+          flex: 4,
+          child: SizedBox(
+            height: 40,
+            child: ElevatedButton.icon(
+              key: const Key('record_mode_button'),
+              onPressed: () {
+                setState(() {
+                  _isRecordMode = !_isRecordMode;
+                  if (_isRecordMode) {
+                    _isEditMode = false;
+                  }
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isRecordMode
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF991B1B),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(11),
+                  side: BorderSide(
+                    color: _isRecordMode
+                        ? Colors.white
+                        : const Color(0xFFEF4444),
+                    width: _isRecordMode ? 1.8 : 1.2,
+                  ),
                 ),
               ),
-            ),
-            icon: Icon(
-              _isRecordMode
-                  ? Icons.radio_button_checked_rounded
-                  : Icons.fiber_manual_record_rounded,
-              size: 18,
-              color: Colors.white,
-            ),
-            label: Text(
-              _isRecordMode ? 'RECORD : CHOISIR CASE' : 'RECORD (ASSIGNER SON)',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 11.5,
-                letterSpacing: 0.4,
+              icon: Icon(
+                _isRecordMode
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.fiber_manual_record_rounded,
+                size: 16,
+                color: Colors.white,
+              ),
+              label: Text(
+                _isRecordMode ? 'CHOISIR CASE' : 'RECORD',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11.5,
+                  letterSpacing: 0.4,
+                ),
               ),
             ),
           ),
@@ -734,36 +810,41 @@ class _SamplerScreenState extends State<SamplerScreen> {
         // BOUTON ÉDITER PAD
         Expanded(
           flex: 3,
-          child: OutlinedButton.icon(
-            key: const Key('edit_mode_button'),
-            onPressed: () {
-              setState(() {
-                _isEditMode = !_isEditMode;
-                if (_isEditMode) {
-                  _isRecordMode = false;
-                }
-              });
-            },
-            style: OutlinedButton.styleFrom(
-              backgroundColor: _isEditMode
-                  ? const Color(0xFF3B82F6).withValues(alpha: 0.25)
-                  : const Color(0xFF131724),
-              foregroundColor:
-                  _isEditMode ? const Color(0xFF60A5FA) : Colors.white70,
-              side: BorderSide(
-                color: _isEditMode
-                    ? const Color(0xFF60A5FA)
-                    : Colors.white24,
+          child: SizedBox(
+            height: 40,
+            child: OutlinedButton.icon(
+              key: const Key('edit_mode_button'),
+              onPressed: () {
+                setState(() {
+                  _isEditMode = !_isEditMode;
+                  if (_isEditMode) {
+                    _isRecordMode = false;
+                  }
+                });
+              },
+              style: OutlinedButton.styleFrom(
+                backgroundColor: _isEditMode
+                    ? const Color(0xFF3B82F6).withValues(alpha: 0.25)
+                    : const Color(0xFF131724),
+                foregroundColor:
+                    _isEditMode ? const Color(0xFF60A5FA) : Colors.white70,
+                side: BorderSide(
+                  color: _isEditMode
+                      ? const Color(0xFF60A5FA)
+                      : Colors.white24,
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(11),
+                ),
               ),
-              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(11),
+              icon: const Icon(Icons.tune_rounded, size: 15),
+              label: const Text(
+                'ÉDITER',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
               ),
-            ),
-            icon: const Icon(Icons.tune_rounded, size: 16),
-            label: const Text(
-              'ÉDITER',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11),
             ),
           ),
         ),
@@ -771,27 +852,32 @@ class _SamplerScreenState extends State<SamplerScreen> {
 
         // BOUTON STOP ALL (PANIC)
         Expanded(
-          flex: 2,
-          child: OutlinedButton.icon(
-            key: const Key('stop_all_button'),
-            onPressed: _stopAllSounds,
-            style: OutlinedButton.styleFrom(
-              backgroundColor: const Color(0xFF1C1924),
-              foregroundColor: Colors.amberAccent,
-              side: BorderSide(
-                color: _loopingPads.isNotEmpty || _isPlayingSeq
-                    ? Colors.amberAccent
-                    : Colors.white24,
+          flex: 3,
+          child: SizedBox(
+            height: 40,
+            child: OutlinedButton.icon(
+              key: const Key('stop_all_button'),
+              onPressed: _stopAllSounds,
+              style: OutlinedButton.styleFrom(
+                backgroundColor: const Color(0xFF1C1924),
+                foregroundColor: Colors.amberAccent,
+                side: BorderSide(
+                  color: _loopingPads.isNotEmpty || _isPlayingSeq
+                      ? Colors.amberAccent
+                      : Colors.white24,
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(11),
+                ),
               ),
-              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 6),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(11),
+              icon: const Icon(Icons.stop_rounded, size: 16),
+              label: const Text(
+                'STOP',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
               ),
-            ),
-            icon: const Icon(Icons.stop_rounded, size: 17),
-            label: const Text(
-              'STOP',
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
             ),
           ),
         ),
@@ -822,8 +908,8 @@ class _SamplerScreenState extends State<SamplerScreen> {
           Expanded(
             child: Text(
               isRec
-                  ? 'MODE RECORD ACTIF : Touchez l’une des 16 cases pour enregistrer au micro ou charger un fichier WAV.'
-                  : 'MODE ÉDITION ACTIF : Touchez une case pour régler son volume, son pitch, son mode ou sa découpe.',
+                  ? 'MODE RECORD : Touchez une case pour capturer un son au micro ou importer un audio.'
+                  : 'MODE ÉDITION : Touchez une case pour découper, régler ou exporter le son en WAV.',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 11,
@@ -995,7 +1081,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
                                 ],
                               )
                             : const Icon(
-                                Icons.add_rounded,
+                                Icons.mic_none_rounded,
                                 size: 12,
                                 color: Colors.white30,
                               ),
@@ -1004,7 +1090,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
               ],
             ),
 
-            // Zone centrale : Forme d'onde (Waveform) ou invitation à assigner
+            // Zone centrale : Forme d'onde (Waveform) ou invitation à enregistrer
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1021,32 +1107,35 @@ class _SamplerScreenState extends State<SamplerScreen> {
                       )
                     : Center(
                         child: Text(
-                          _isRecordMode ? 'ASSIGNER' : 'VIDE',
+                          _isRecordMode ? 'CAPTURER' : '+ SON',
                           style: TextStyle(
                             color: _isRecordMode
                                 ? const Color(0xFFEF4444)
                                 : Colors.white24,
-                            fontSize: 10,
+                            fontSize: 9.5,
                             fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6,
+                            letterSpacing: 0.4,
                           ),
                         ),
                       ),
               ),
             ),
 
-            // Ligne inférieure : Nom du sample & durée / pitch
+            // Ligne inférieure : Nom du sample & durée / compteur
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(
-                  pad.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: hasSound ? Colors.white : Colors.white38,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 10.5,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    pad.label,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: hasSound ? Colors.white : Colors.white38,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 10.5,
+                    ),
                   ),
                 ),
                 if (hasSound)
@@ -1093,187 +1182,227 @@ class _SamplerScreenState extends State<SamplerScreen> {
     );
   }
 
+  /// Console BPM global & Séquenceur (affichée exclusivement sur la Banque D Studio).
   Widget _buildBottomRhythmConsole() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      key: const Key('studio_bpm_console'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF131724),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(
+          color: const Color(0xFFA855F7).withValues(alpha: 0.35),
+        ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            // MÉTRONOME ON/OFF
-            InkWell(
-              key: const Key('metronome_toggle_button'),
-              onTap: _toggleMetronome,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _metronomeActive
-                      ? const Color(0xFF10B981).withValues(alpha: 0.22)
-                      : const Color(0xFF1B2030),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _metronomeActive
-                        ? const Color(0xFF10B981)
-                        : Colors.white12,
-                  ),
-                ),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          return SizedBox(
+            width: constraints.maxWidth,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: <Widget>[
-                    Icon(
-                      Icons.av_timer_rounded,
-                      size: 15,
-                      color: _metronomeActive
-                          ? const Color(0xFF10B981)
-                          : Colors.white60,
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        // MÉTRONOME ON/OFF
+                        InkWell(
+                          key: const Key('metronome_toggle_button'),
+                          onTap: _toggleMetronome,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 30,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: _metronomeActive
+                                  ? const Color(0xFF10B981)
+                                      .withValues(alpha: 0.22)
+                                  : const Color(0xFF1B2030),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _metronomeActive
+                                    ? const Color(0xFF10B981)
+                                    : Colors.white12,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Icon(
+                                  Icons.av_timer_rounded,
+                                  size: 14,
+                                  color: _metronomeActive
+                                      ? const Color(0xFF10B981)
+                                      : Colors.white60,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$_bpm BPM',
+                                  style: TextStyle(
+                                    color: _metronomeActive
+                                        ? const Color(0xFF10B981)
+                                        : Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 10.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        // BPM - / + / TAP
+                        IconButton(
+                          key: const Key('bpm_minus_button'),
+                          onPressed: () => _changeBpm(-5),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 24, minHeight: 28),
+                          icon: const Icon(
+                            Icons.remove_rounded,
+                            color: Colors.white70,
+                            size: 15,
+                          ),
+                        ),
+                        IconButton(
+                          key: const Key('bpm_plus_button'),
+                          onPressed: () => _changeBpm(5),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 24, minHeight: 28),
+                          icon: const Icon(
+                            Icons.add_rounded,
+                            color: Colors.white70,
+                            size: 15,
+                          ),
+                        ),
+                        InkWell(
+                          key: const Key('tap_tempo_button'),
+                          onTap: _handleTapTempo,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            height: 28,
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1B2030),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'TAP',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$_bpm BPM',
-                      style: TextStyle(
-                        color: _metronomeActive
-                            ? const Color(0xFF10B981)
-                            : Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 11,
-                      ),
+                    const SizedBox(width: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        // SÉQUENCEUR / LOOPER LIVE
+                        InkWell(
+                          key: const Key('seq_record_button'),
+                          onTap: _toggleSeqRecording,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 30,
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: _isRecordingSeq
+                                  ? const Color(0xFFEF4444)
+                                  : const Color(0xFF1B2030),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _isRecordingSeq
+                                    ? Colors.white
+                                    : const Color(0xFFEF4444)
+                                        .withValues(alpha: 0.6),
+                              ),
+                            ),
+                            child: Text(
+                              _isRecordingSeq ? 'STOP SEQ' : 'REC SEQ',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        InkWell(
+                          key: const Key('seq_play_button'),
+                          onTap: _recordedSeqEvents.isEmpty
+                              ? null
+                              : _toggleSeqPlayback,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 30,
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: _isPlayingSeq
+                                  ? const Color(0xFF3B82F6)
+                                  : const Color(0xFF1B2030),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _recordedSeqEvents.isNotEmpty
+                                    ? const Color(0xFF3B82F6)
+                                    : Colors.white12,
+                              ),
+                            ),
+                            child: Text(
+                              _isPlayingSeq
+                                  ? 'LOOP ON (${_recordedSeqEvents.length})'
+                                  : 'LOOP (${_recordedSeqEvents.length})',
+                              style: TextStyle(
+                                color: _recordedSeqEvents.isNotEmpty
+                                    ? Colors.white
+                                    : Colors.white38,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (_recordedSeqEvents.isNotEmpty) ...<Widget>[
+                          const SizedBox(width: 2),
+                          IconButton(
+                            key: const Key('seq_clear_button'),
+                            onPressed: _clearSequence,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 22,
+                              minHeight: 28,
+                            ),
+                            icon: const Icon(
+                              Icons.clear_rounded,
+                              color: Colors.redAccent,
+                              size: 15,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(width: 4),
-            // BPM - / + / TAP
-            IconButton(
-              key: const Key('bpm_minus_button'),
-              onPressed: () => _changeBpm(-5),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
-              icon: const Icon(
-                Icons.remove_rounded,
-                color: Colors.white70,
-                size: 16,
-              ),
-            ),
-            IconButton(
-              key: const Key('bpm_plus_button'),
-              onPressed: () => _changeBpm(5),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
-              icon: const Icon(
-                Icons.add_rounded,
-                color: Colors.white70,
-                size: 16,
-              ),
-            ),
-            InkWell(
-              key: const Key('tap_tempo_button'),
-              onTap: _handleTapTempo,
-              borderRadius: BorderRadius.circular(6),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1B2030),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'TAP',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-
-            // SÉQUENCEUR / LOOPER LIVE
-            InkWell(
-              key: const Key('seq_record_button'),
-              onTap: _toggleSeqRecording,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _isRecordingSeq
-                      ? const Color(0xFFEF4444)
-                      : const Color(0xFF1B2030),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _isRecordingSeq
-                        ? Colors.white
-                        : const Color(0xFFEF4444).withValues(alpha: 0.6),
-                  ),
-                ),
-                child: Text(
-                  _isRecordingSeq ? 'STOP SEQ' : 'REC SEQ',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 5),
-            InkWell(
-              key: const Key('seq_play_button'),
-              onTap: _recordedSeqEvents.isEmpty ? null : _toggleSeqPlayback,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _isPlayingSeq
-                      ? const Color(0xFF3B82F6)
-                      : const Color(0xFF1B2030),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: _recordedSeqEvents.isNotEmpty
-                        ? const Color(0xFF3B82F6)
-                        : Colors.white12,
-                  ),
-                ),
-                child: Text(
-                  _isPlayingSeq
-                      ? 'LOOP ON (${_recordedSeqEvents.length})'
-                      : 'LOOP (${_recordedSeqEvents.length})',
-                  style: TextStyle(
-                    color: _recordedSeqEvents.isNotEmpty
-                        ? Colors.white
-                        : Colors.white38,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ),
-            if (_recordedSeqEvents.isNotEmpty) ...<Widget>[
-              const SizedBox(width: 4),
-              IconButton(
-                key: const Key('seq_clear_button'),
-                onPressed: _clearSequence,
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
-                icon: const Icon(
-                  Icons.clear_rounded,
-                  color: Colors.redAccent,
-                  size: 16,
-                ),
-              ),
-            ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -1298,7 +1427,7 @@ class _FeatureGuideItem extends StatelessWidget {
           Text(
             title,
             style: const TextStyle(
-              color: Color(0xFF38BDF8),
+              color: Color(0xFF10B981),
               fontWeight: FontWeight.w800,
               fontSize: 13,
             ),

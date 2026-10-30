@@ -14,7 +14,6 @@ void main() {
       for (final preset in SynthPresetKind.values) {
         final res = WavDspService.generatePresetWav(preset);
         expect(res.wavBytes.length, greaterThan(44));
-        // En-tête RIFF....WAVE
         expect(String.fromCharCodes(res.wavBytes.sublist(0, 4)), equals('RIFF'));
         expect(String.fromCharCodes(res.wavBytes.sublist(8, 12)), equals('WAVE'));
         expect(res.durationMs, greaterThan(50));
@@ -27,8 +26,8 @@ void main() {
 
     test('Auto-Trim coupe le silence initial d’un enregistrement micro et normalise le gain', () {
       const sampleRate = 44100;
-      final silenceSamples = (0.20 * sampleRate).round(); // 200 ms de silence
-      final toneSamples = (0.30 * sampleRate).round(); // 300 ms de signal
+      final silenceSamples = (0.20 * sampleRate).round();
+      final toneSamples = (0.30 * sampleRate).round();
       final pcm = Int16List(silenceSamples + toneSamples);
       for (var i = 0; i < toneSamples; i++) {
         pcm[silenceSamples + i] = (i.isEven ? 4000 : -4000);
@@ -42,7 +41,6 @@ void main() {
         normalize: true,
       );
 
-      // La durée après Auto-Trim doit être nettement plus courte (~305-340 ms au lieu de 500 ms)
       expect(trimmed.durationMs, lessThan(rawAnalysis.durationMs - 120));
       expect(trimmed.durationMs, greaterThanOrEqualTo(280));
     });
@@ -63,16 +61,18 @@ void main() {
     });
   });
 
-  group('SamplerModels — Sérialisation JSON & Grille 4x4 (16 Pads)', () {
+  group('SamplerModels — Sérialisation JSON & Organisation Banques A/B/C vs D Studio', () {
     test('Une banque conserve exactement 16 cases après sérialisation JSON', () {
       final bank = SamplerBank.createEmptyBank(
-        id: 'B',
-        name: 'BANQUE B',
-        subtitle: 'Test 4x4',
+        id: 'A',
+        name: 'BANQUE A',
+        subtitle: 'Sons de la Vie 1',
       );
       expect(bank.pads.length, equals(16));
+      expect(bank.isStudioBank, isFalse);
+
       final updatedPad = bank.pads[5].copyWith(
-        label: 'MON SON',
+        label: 'RIRE BEBE',
         source: PadSoundSource.microphone,
         filePath: '/tmp/test.wav',
         durationMs: 420,
@@ -84,20 +84,36 @@ void main() {
       final restored = SamplerBank.fromJson(updatedBank.toJson());
 
       expect(restored.pads.length, equals(16));
-      expect(restored.pads[5].label, equals('MON SON'));
+      expect(restored.pads[5].label, equals('RIRE BEBE'));
       expect(restored.pads[5].source, equals(PadSoundSource.microphone));
       expect(restored.pads[5].triggerMode, equals(PadTriggerMode.oneShot));
       expect(restored.pads[5].volume, closeTo(1.25, 0.001));
       expect(restored.pads[5].pitch, closeTo(1.15, 0.001));
     });
+
+    test('Les banques par défaut placent les sons de vie en A/B/C et le Kit Studio 808 en Banque D', () {
+      final engine = SamplerAudioEngine();
+      final banks = engine.buildDefaultBanksSync();
+      expect(banks.length, equals(4));
+      expect(banks[0].id, equals('A'));
+      expect(banks[0].isStudioBank, isFalse);
+      expect(banks[0].assignedCount, equals(0));
+      expect(banks[1].id, equals('B'));
+      expect(banks[1].assignedCount, equals(0));
+      expect(banks[2].id, equals('C'));
+      expect(banks[2].assignedCount, equals(0));
+      expect(banks[3].id, equals('D'));
+      expect(banks[3].isStudioBank, isTrue);
+      expect(banks[3].assignedCount, equals(16));
+    });
   });
 
-  group('Interface Sampleur 4x4 — Lecture illimitée, Bouton Record (Micro & WAV)', () {
+  group('LifeSampler UI — Splash Screen, Banques A/D, Fenêtre Éditer & Export WAV', () {
     late Directory tempDir;
     late SamplerAudioEngine engine;
 
     setUp(() {
-      tempDir = Directory.systemTemp.createTempSync('pulsepad_test_');
+      tempDir = Directory.systemTemp.createTempSync('lifesampler_test_');
       engine = SamplerAudioEngine(customStorageDir: tempDir);
     });
 
@@ -108,50 +124,58 @@ void main() {
     });
 
     testWidgets(
-      'Affiche les 16 cases (4x4), rejoue un son autant de fois que voulu et assigne via RECORD (Micro + WAV)',
+      'Affiche le Splash Screen LifeSampler au démarrage, verrouille l’organisation A/B/C vs D Studio, groupe Auto-Trim/Booster sur la même ligne et exporte un son en WAV',
       (WidgetTester tester) async {
-        tester.view.physicalSize = const Size(1080, 2280);
-        tester.view.devicePixelRatio = 2.625;
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 3.0;
         addTearDown(() {
           tester.view.resetPhysicalSize();
           tester.view.resetDevicePixelRatio();
         });
 
-        await tester.pumpWidget(PersonalSamplerApp(audioEngine: engine));
+        await tester.pumpWidget(
+          PersonalSamplerApp(
+            audioEngine: engine,
+            showSplashOnStart: true,
+            splashAutoDismissDuration: null,
+          ),
+        );
         await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
 
-        // 1. Vérifier que les 16 cases (0..15) sont présentes à l'écran
+        // 1. Vérifier le Splash Screen au démarrage avec le nom LifeSampler et l'illustration cartoon
+        expect(find.byKey(const Key('lifesampler_splash_screen')), findsOneWidget);
+        expect(find.text('LifeSampler'), findsOneWidget);
+        expect(find.byKey(const Key('splash_cartoon_image')), findsOneWidget);
+
+        // Passer à l'écran principal
+        await tester.tap(find.byKey(const Key('splash_continue_button')));
+        await tester.pumpAndSettle();
+
+        // 2. Vérifier l'écran principal sur la Banque A (Sons de la vie) :
+        //    - Titre LIFESAMPLER
+        //    - 16 cases présentes
+        //    - Pas de console BPM global sur la Banque A
+        expect(find.text('LIFESAMPLER'), findsOneWidget);
         for (var i = 0; i < 16; i++) {
           expect(find.byKey(Key('sampler_pad_$i')), findsOneWidget);
         }
+        expect(find.byKey(const Key('studio_bpm_console')), findsNothing);
 
-        // 2. Appuyer 4 fois de suite sur la case 0 (KICK 808) pour vérifier la relecture illimitée
-        final pad0Finder = find.byKey(const Key('sampler_pad_0'));
-        await tester.tap(pad0Finder);
-        await tester.pump(const Duration(milliseconds: 40));
-        await tester.tap(pad0Finder);
-        await tester.pump(const Duration(milliseconds: 40));
-        await tester.tap(pad0Finder);
-        await tester.pump(const Duration(milliseconds: 40));
-        await tester.tap(pad0Finder);
-        await tester.pump(const Duration(milliseconds: 200));
-
-        expect(find.text('×4'), findsOneWidget);
-
-        // 3. Basculer sur la Banque B (vierge) pour tester l'assignation via le bouton RECORD
-        await tester.tap(find.byKey(const Key('bank_chip_B')));
-        await tester.pumpAndSettle();
-
-        // Activer le bouton RECORD
-        await tester.tap(find.byKey(const Key('record_mode_button')));
-        await tester.pump();
-        expect(find.byKey(const Key('active_mode_banner')), findsOneWidget);
-
-        // Toucher la case 0 pour lui assigner un enregistrement Micro
+        // 3. Toucher la case 0 (vide sur la Banque A) pour enregistrer un son micro
         await tester.tap(find.byKey(const Key('sampler_pad_0')));
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('pad_assignment_sheet')), findsOneWidget);
+
+        // Vérifier que les pré-réglages Studio 808 ne sont PAS dans la fenêtre Éditer
+        expect(find.text('KICK 808'), findsNothing);
+        expect(find.byKey(const Key('preset_chip_kick808')), findsNothing);
+
+        // Vérifier que les boutons Auto-Trim et Booster Micro sont sur la même ligne (même ordonnée Y)
+        final autoTrimCenter =
+            tester.getCenter(find.byKey(const Key('auto_trim_silence_chip')));
+        final boosterCenter =
+            tester.getCenter(find.byKey(const Key('normalize_mic_chip')));
+        expect((autoTrimCenter.dy - boosterCenter.dy).abs(), lessThan(1.0));
 
         // Démarrer l'enregistrement micro puis l'arrêter
         await tester.tap(find.byKey(const Key('mic_record_toggle_button')));
@@ -160,11 +184,20 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
 
-        // Valider et fermer la fenêtre
+        // Exporter le son directement depuis la fenêtre Éditer
+        final exportBtn = find.byKey(const Key('export_pad_wav_button'));
+        expect(exportBtn, findsOneWidget);
+        await tester.tap(exportBtn);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byKey(const Key('pad_status_banner')), findsOneWidget);
+        expect(find.textContaining('Son exporté :'), findsOneWidget);
+
+        // Valider et fermer la fenêtre Éditer
         await tester.tap(find.byKey(const Key('save_pad_assignment_button')));
         await tester.pumpAndSettle();
 
-        // La case 0 affiche désormais "MICRO 01" et peut être jouée autant de fois qu'on veut
+        // La case 0 affiche désormais "MICRO 01" et peut être rejouée à volonté
         expect(find.text('MICRO 01'), findsOneWidget);
         await tester.tap(find.byKey(const Key('sampler_pad_0')));
         await tester.pump(const Duration(milliseconds: 160));
@@ -172,23 +205,14 @@ void main() {
         await tester.pump(const Duration(milliseconds: 160));
         expect(find.text('×2'), findsOneWidget);
 
-        // 4. Activer le bouton RECORD et assigner un fichier WAV depuis l'appareil sur la case 1
-        await tester.tap(find.byKey(const Key('record_mode_button')));
-        await tester.pump();
-        await tester.tap(find.byKey(const Key('sampler_pad_1')));
+        // 4. Basculer sur la Banque D (Studio) et vérifier que les 16 sons Studio 808
+        //    ainsi que le BPM global s'affichent uniquement sur la Banque D
+        await tester.tap(find.byKey(const Key('bank_chip_D')));
         await tester.pumpAndSettle();
 
-        await tester.tap(find.byKey(const Key('import_wav_file_button')));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
-
-        await tester.tap(find.byKey(const Key('save_pad_assignment_button')));
-        await tester.pumpAndSettle();
-
-        // La case 1 possède maintenant son fichier WAV importé et peut être déclenchée
-        expect(find.text('SAMPLE PAD'), findsOneWidget);
-        await tester.tap(find.byKey(const Key('sampler_pad_1')));
-        await tester.pump(const Duration(milliseconds: 200));
+        expect(find.byKey(const Key('studio_bpm_console')), findsOneWidget);
+        expect(find.text('KICK 808'), findsOneWidget);
+        expect(find.text('120 BPM'), findsOneWidget);
       },
     );
   });
