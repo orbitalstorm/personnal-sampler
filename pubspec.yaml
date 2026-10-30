@@ -1,0 +1,21 @@
+name: personnal_sampler
+description: "PulsePad 16 v1.0.0 — Application Mobile Android de Sampleur 4x4 (16 Pads) avec Enregistrement Micro, Import WAV/Audio, Éditeur Waveform & Séquenceur Live."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
