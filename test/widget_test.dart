@@ -269,5 +269,64 @@ void main() {
         expect(find.text('120 BPM'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'S’adapte parfaitement aux écrans iPhone 16 Pro (393×852 pt avec Dynamic Island & Home Indicator) et iPhone SE (375×667 pt) sans erreur d’overflow',
+      (WidgetTester tester) async {
+        // Dimensions iPhone 16 Pro : 1179×2556 px @ 3.0x (393×852 pt)
+        // SafeArea iOS : top = 59 pt (Dynamic Island), bottom = 34 pt (Home Indicator)
+        tester.view.physicalSize = const Size(1179, 2556);
+        tester.view.devicePixelRatio = 3.0;
+        tester.view.padding = const FakeViewPadding(
+          top: 59.0 * 3.0,
+          bottom: 34.0 * 3.0,
+        );
+        tester.view.viewPadding = const FakeViewPadding(
+          top: 59.0 * 3.0,
+          bottom: 34.0 * 3.0,
+        );
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.view.resetPadding();
+          tester.view.resetViewPadding();
+        });
+
+        await tester.pumpWidget(
+          PersonalSamplerApp(
+            audioEngine: engine,
+            showSplashOnStart: false,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Vérifier l'affichage complet des 16 pads sur iPhone 16 Pro
+        expect(find.byKey(const Key('lifesampler_top_header')), findsOneWidget);
+        for (var i = 0; i < 16; i++) {
+          expect(find.byKey(Key('sampler_pad_$i')), findsOneWidget);
+        }
+
+        // Ouvrir la fenêtre Éditer sur iPhone 16 Pro et vérifier que le bouton VALIDER est bien visible au-dessus du Home Indicator iOS
+        await tester.tap(find.byKey(const Key('sampler_pad_0')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('pad_assignment_sheet')), findsOneWidget);
+        expect(find.byKey(const Key('save_pad_assignment_button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('save_pad_assignment_button')));
+        await tester.pumpAndSettle();
+
+        // Tester également le format compact iPhone SE (750×1334 px @ 2.0x = 375×667 pt) sur la Banque D Studio (avec console BPM)
+        tester.view.physicalSize = const Size(750, 1334);
+        tester.view.devicePixelRatio = 2.0;
+        tester.view.padding = const FakeViewPadding(top: 20.0 * 2.0, bottom: 0);
+        tester.view.viewPadding =
+            const FakeViewPadding(top: 20.0 * 2.0, bottom: 0);
+
+        await tester.tap(find.byKey(const Key('bank_chip_D')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('studio_bpm_console')), findsOneWidget);
+        expect(find.text('KICK 808'), findsOneWidget);
+      },
+    );
   });
 }

@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build iOS IPA, Web PWA & Android APK
 
 on:
   push:
@@ -8,10 +8,12 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build-apk:
-    name: Analyze, Test & Build Release APK
+    name: Analyze, Test & Build Android APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,7 +37,7 @@ jobs:
       - name: Run static analysis
         run: flutter analyze
 
-      - name: Run unit & widget tests
+      - name: Run unit & widget tests (Android + iPhone 16 Pro & SE)
         run: flutter test
 
       - name: Build Android Release APK
@@ -43,28 +45,140 @@ jobs:
 
       - name: Copy APK with versioned names
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/lifesampler-v1.3.0.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/personnal-sampler-v1.3.0.apk
           ls -lh build/app/outputs/flutter-apk/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lifesampler-v1.2.0-apk
+          name: lifesampler-v1.3.0-apk
           path: |
             build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk
-            build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk
+            build/app/outputs/flutter-apk/lifesampler-v1.3.0.apk
+            build/app/outputs/flutter-apk/personnal-sampler-v1.3.0.apk
           if-no-files-found: error
 
-      - name: Publish GitHub Release on Tag
+      - name: Publish Android APK to GitHub Release on Tag
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk --clobber
+            gh release upload "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.3.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.3.0.apk --clobber
           else
-            gh release create "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME" --generate-notes
+            gh release create "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.3.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.3.0.apk --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME (iPhone iOS & Android)" --generate-notes
           fi
+
+  build-ios:
+    name: Build iPhone iOS (.ipa & Simulator .app)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter Stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS Release (Unsigned for Sideloadly / AltStore)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package iPhone IPA (lifesampler-v1.3.0-ios.ipa)
+        run: |
+          mkdir -p build/ios/ipa_stage/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa_stage/Payload/Runner.app
+          cd build/ios/ipa_stage
+          zip -qry ../lifesampler-v1.3.0-ios.ipa Payload
+          ls -lh ../lifesampler-v1.3.0-ios.ipa
+
+      - name: Build iOS Simulator App
+        run: |
+          flutter build ios --simulator --debug
+          cd build/ios/iphonesimulator
+          zip -qry ../lifesampler-v1.3.0-ios-simulator.zip Runner.app
+          ls -lh ../lifesampler-v1.3.0-ios-simulator.zip
+
+      - name: Upload iPhone iOS IPA & Simulator Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifesampler-v1.3.0-ios-ipa
+          path: |
+            build/ios/lifesampler-v1.3.0-ios.ipa
+            build/ios/lifesampler-v1.3.0-ios-simulator.zip
+          if-no-files-found: error
+
+      - name: Publish iPhone IPA to GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release upload "$TAG_NAME" build/ios/lifesampler-v1.3.0-ios.ipa build/ios/lifesampler-v1.3.0-ios-simulator.zip --clobber && break
+            else
+              gh release create "$TAG_NAME" build/ios/lifesampler-v1.3.0-ios.ipa build/ios/lifesampler-v1.3.0-ios-simulator.zip --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME (iPhone iOS & Android)" --generate-notes && break
+            fi
+            sleep 3
+          done
+
+  build-web-pwa:
+    name: Build & Deploy iPhone Safari PWA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter Stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Web PWA for iPhone Safari
+        run: |
+          flutter build web --release --base-href "/personnal-sampler/"
+          cp build/web/index.html build/web/404.html
+          touch build/web/.nojekyll
+          cd build/web
+          zip -qry ../lifesampler-v1.3.0-iphone-web-pwa.zip .
+          ls -lh ../lifesampler-v1.3.0-iphone-web-pwa.zip
+
+      - name: Upload iPhone Web PWA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifesampler-v1.3.0-iphone-web-pwa
+          path: build/lifesampler-v1.3.0-iphone-web-pwa.zip
+          if-no-files-found: error
+
+      - name: Deploy to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web
+          force_orphan: true
+
+      - name: Publish iPhone Web PWA Archive to GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release upload "$TAG_NAME" build/lifesampler-v1.3.0-iphone-web-pwa.zip --clobber && break
+            else
+              gh release create "$TAG_NAME" build/lifesampler-v1.3.0-iphone-web-pwa.zip --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME (iPhone iOS & Android)" --generate-notes && break
+            fi
+            sleep 3
+          done

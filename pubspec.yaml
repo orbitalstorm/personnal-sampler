@@ -1,8 +1,8 @@
 name: personnal_sampler
-description: "LifeSampler v1.2.0 — L'enregistreur bruiteur de la vie (grille 4x4 de 16 pads colorés, capture micro instantanée, protection anti-effacement, formes d'onde, découpe et export WAV)."
+description: "LifeSampler v1.3.0 (iPhone iOS & Android) — L'enregistreur bruiteur de la vie (grille 4x4 de 16 pads colorés, capture micro instantanée, protection anti-effacement, formes d'onde, découpe et export WAV)."
 publish_to: 'none'
 
-version: 1.2.0+3
+version: 1.3.0+4
 
 environment:
   sdk: ">=3.5.0 <4.0.0"

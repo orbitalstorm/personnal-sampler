@@ -4,10 +4,14 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/services.dart';
 
 import '../models/sampler_models.dart';
 import 'wav_dsp_service.dart';
+import 'web_audio_bridge_stub.dart'
+    if (dart.library.js_interop) 'web_audio_bridge_web.dart';
 
 /// Résultat d'un déclenchement de pad.
 class TriggerResult {
@@ -21,12 +25,17 @@ class TriggerResult {
 }
 
 /// Moteur audio et persistance du sampleur 4x4 (16 pads).
-/// Pont entre Flutter, le DSP WAV pur Dart et le moteur natif Android (SoundPool + AudioRecord + SAF).
+/// Pont entre Flutter, le DSP WAV pur Dart et les moteurs natifs :
+/// - iOS natif (`AVAudioPlayer` + `AVAudioRecorder` + `UIDocumentPickerViewController` dans `AppDelegate.swift`),
+/// - Android natif (`SoundPool` + `AudioRecord` + `SAF` dans `MainActivity.kt`),
+/// - Web / PWA iOS Safari (`WebAudioBridge` — Web Audio API + MediaRecorder + Export WAV).
 class SamplerAudioEngine {
   SamplerAudioEngine({Directory? customStorageDir})
       : _customStorageDir = customStorageDir,
-        _nativeChannelAvailable =
-            Platform.isAndroid && customStorageDir == null;
+        _nativeChannelAvailable = !kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS) &&
+            customStorageDir == null;
 
   static const MethodChannel _channel =
       MethodChannel('cloud.orbital8.personnal_sampler/audio');
@@ -39,9 +48,12 @@ class SamplerAudioEngine {
       <SynthPresetKind, WavAnalysisResult>{};
   final Map<SynthPresetKind, String> _presetFilePaths =
       <SynthPresetKind, String>{};
+  final Map<String, Uint8List> _webMemoryFiles = <String, Uint8List>{};
 
   String? _metroDownbeatPath;
   String? _metroUpbeatPath;
+  Uint8List? _metroDownbeatBytes;
+  Uint8List? _metroUpbeatBytes;
 
   DateTime? _fallbackMicStartTime;
 
@@ -51,10 +63,16 @@ class SamplerAudioEngine {
     final defaultWaveforms = <List<double>>[];
     final defaultDurations = <int>[];
     for (final preset in SynthPresetKind.values) {
-      final cached = _presetCache[preset] ?? WavDspService.generatePresetWav(preset);
+      final cached =
+          _presetCache[preset] ?? WavDspService.generatePresetWav(preset);
       _presetCache[preset] = cached;
       defaultWaveforms.add(cached.waveformPeaks);
       defaultDurations.add(cached.durationMs);
+      if (kIsWeb) {
+        final vPath = '/web_samples/preset_${preset.index}_${preset.name}.wav';
+        _presetFilePaths[preset] = vPath;
+        _webMemoryFiles[vPath] = cached.wavBytes;
+      }
     }
     return _createDefaultBanks(
       defaultWaveforms: defaultWaveforms,
@@ -65,14 +83,44 @@ class SamplerAudioEngine {
   /// Initialise le répertoire de stockage, génère les fichiers WAV du Kit Studio 808
   /// et charge les 4 banques sauvegardées (ou crée les banques par défaut).
   Future<List<SamplerBank>> initialize() async {
+    final defaultWaveforms = <List<double>>[];
+    final defaultDurations = <int>[];
+
+    if (kIsWeb) {
+      for (final preset in SynthPresetKind.values) {
+        final analysis =
+            _presetCache[preset] ?? WavDspService.generatePresetWav(preset);
+        _presetCache[preset] = analysis;
+        defaultWaveforms.add(analysis.waveformPeaks);
+        defaultDurations.add(analysis.durationMs);
+
+        final vPath = '/web_samples/preset_${preset.index}_${preset.name}.wav';
+        _presetFilePaths[preset] = vPath;
+        _webMemoryFiles[vPath] = analysis.wavBytes;
+      }
+
+      _metroDownbeatBytes =
+          WavDspService.generateMetronomeClickWav(isDownbeat: true);
+      _metroUpbeatBytes =
+          WavDspService.generateMetronomeClickWav(isDownbeat: false);
+      _metroDownbeatPath = '/web_samples/metro_down.wav';
+      _metroUpbeatPath = '/web_samples/metro_up.wav';
+      _webMemoryFiles[_metroDownbeatPath!] = _metroDownbeatBytes!;
+      _webMemoryFiles[_metroUpbeatPath!] = _metroUpbeatBytes!;
+
+      final savedBanks = await _loadSavedBanks(
+        defaultWaveforms: defaultWaveforms,
+        defaultDurations: defaultDurations,
+      );
+      await preloadBank(savedBanks.first);
+      return savedBanks;
+    }
+
     final baseDir = await _resolveStorageDir();
     final samplesDir = Directory('${baseDir.path}/samples');
     if (!samplesDir.existsSync()) {
       samplesDir.createSync(recursive: true);
     }
-
-    final defaultWaveforms = <List<double>>[];
-    final defaultDurations = <int>[];
 
     for (final preset in SynthPresetKind.values) {
       final analysis = WavDspService.generatePresetWav(preset);
@@ -80,7 +128,9 @@ class SamplerAudioEngine {
       defaultWaveforms.add(analysis.waveformPeaks);
       defaultDurations.add(analysis.durationMs);
 
-      final presetFile = File('${samplesDir.path}/preset_${preset.index}_${preset.name}.wav');
+      final presetFile = File(
+        '${samplesDir.path}/preset_${preset.index}_${preset.name}.wav',
+      );
       if (!presetFile.existsSync()) {
         presetFile.writeAsBytesSync(analysis.wavBytes, flush: true);
       }
@@ -115,8 +165,17 @@ class SamplerAudioEngine {
     return savedBanks;
   }
 
-  /// Pré-charge les sons d'une banque dans le SoundPool natif Android.
+  /// Pré-charge les sons d'une banque dans le moteur audio (iOS AVAudioPlayer / Android SoundPool / WebAudio).
   Future<void> preloadBank(SamplerBank bank) async {
+    if (kIsWeb) {
+      for (final pad in bank.pads) {
+        final bytes = _resolveWebBytes(pad);
+        if (bytes != null && bytes.isNotEmpty) {
+          WebAudioBridge.preloadPad(pad.id, bytes);
+        }
+      }
+      return;
+    }
     if (!_nativeChannelAvailable) return;
     for (final pad in bank.pads) {
       final path = resolvePlayablePath(pad);
@@ -139,8 +198,42 @@ class SamplerAudioEngine {
     }
   }
 
+  Uint8List? _resolveWebBytes(SamplerPad pad) {
+    if (pad.activePlaybackPath != null &&
+        _webMemoryFiles.containsKey(pad.activePlaybackPath!)) {
+      return _webMemoryFiles[pad.activePlaybackPath!];
+    }
+    if (pad.filePath != null && _webMemoryFiles.containsKey(pad.filePath!)) {
+      return _webMemoryFiles[pad.filePath!];
+    }
+    if (pad.source == PadSoundSource.synthPreset && pad.synthPreset != null) {
+      final cached = _presetCache[pad.synthPreset!] ??
+          WavDspService.generatePresetWav(pad.synthPreset!);
+      _presetCache[pad.synthPreset!] = cached;
+      return cached.wavBytes;
+    }
+    return null;
+  }
+
   /// Résout le chemin de fichier WAV jouable pour un pad.
   String? resolvePlayablePath(SamplerPad pad) {
+    if (kIsWeb) {
+      if (pad.activePlaybackPath != null &&
+          pad.activePlaybackPath!.isNotEmpty &&
+          _webMemoryFiles.containsKey(pad.activePlaybackPath!)) {
+        return pad.activePlaybackPath;
+      }
+      if (pad.filePath != null &&
+          pad.filePath!.isNotEmpty &&
+          _webMemoryFiles.containsKey(pad.filePath!)) {
+        return pad.filePath;
+      }
+      if (pad.source == PadSoundSource.synthPreset && pad.synthPreset != null) {
+        return _presetFilePaths[pad.synthPreset!];
+      }
+      return null;
+    }
+
     if (pad.activePlaybackPath != null &&
         pad.activePlaybackPath!.isNotEmpty &&
         File(pad.activePlaybackPath!).existsSync()) {
@@ -163,11 +256,32 @@ class SamplerAudioEngine {
       return const TriggerResult(playing: false, looping: false);
     }
 
-    final path = resolvePlayablePath(pad);
     try {
       unawaited(HapticFeedback.lightImpact());
     } catch (_) {}
 
+    if (kIsWeb) {
+      final bytes = _resolveWebBytes(pad);
+      if (bytes != null && bytes.isNotEmpty) {
+        final loopingNow = WebAudioBridge.triggerPad(
+          padId: pad.id,
+          wavBytes: bytes,
+          volume: pad.volume,
+          pitch: pad.pitch,
+          mode: pad.triggerMode.name,
+          chokeGroup: pad.chokeGroup,
+        );
+        final isLoopMode = pad.triggerMode == PadTriggerMode.loop;
+        return TriggerResult(
+          playing: !isLoopMode || loopingNow,
+          looping: isLoopMode && loopingNow,
+        );
+      }
+      final isLoop = pad.triggerMode == PadTriggerMode.loop;
+      return TriggerResult(playing: true, looping: isLoop);
+    }
+
+    final path = resolvePlayablePath(pad);
     if (path == null || !_nativeChannelAvailable) {
       final isLoop = pad.triggerMode == PadTriggerMode.loop;
       return TriggerResult(playing: true, looping: isLoop);
@@ -203,6 +317,20 @@ class SamplerAudioEngine {
 
   /// Joue un clic de métronome.
   Future<void> triggerMetronomeClick({required bool isDownbeat}) async {
+    if (kIsWeb) {
+      final bytes = isDownbeat ? _metroDownbeatBytes : _metroUpbeatBytes;
+      if (bytes != null) {
+        WebAudioBridge.triggerPad(
+          padId: isDownbeat ? 98 : 99,
+          wavBytes: bytes,
+          volume: isDownbeat ? 0.75 : 0.45,
+          pitch: 1.0,
+          mode: 'oneShot',
+          chokeGroup: 0,
+        );
+      }
+      return;
+    }
     if (!_nativeChannelAvailable) return;
     final path = isDownbeat ? _metroDownbeatPath : _metroUpbeatPath;
     if (path == null) return;
@@ -227,6 +355,10 @@ class SamplerAudioEngine {
 
   /// Arrête immédiatement un pad spécifique.
   Future<void> stopPad(int padId) async {
+    if (kIsWeb) {
+      WebAudioBridge.stopPad(padId);
+      return;
+    }
     if (!_nativeChannelAvailable) return;
     try {
       await _channel.invokeMethod<dynamic>(
@@ -242,6 +374,10 @@ class SamplerAudioEngine {
 
   /// Coupe immédiatement tous les sons et boucles en cours (Bouton STOP / Panic).
   Future<void> stopAllPads() async {
+    if (kIsWeb) {
+      WebAudioBridge.stopAllPads();
+      return;
+    }
     if (!_nativeChannelAvailable) return;
     try {
       await _channel.invokeMethod<dynamic>('stopAllPads');
@@ -252,9 +388,10 @@ class SamplerAudioEngine {
     }
   }
 
-  /// Masque ou ré-affiche la barre de navigation système Android (boutons Home / Retour / Récents)
+  /// Masque ou ré-affiche la barre de navigation système (Android / iOS Home Indicator)
   /// pendant l'ouverture de l'écran Éditer afin qu'elle ne masque jamais le bouton de validation.
   Future<void> setEditImmersiveMode(bool enabled) async {
+    if (kIsWeb) return;
     try {
       if (enabled) {
         await SystemChrome.setEnabledSystemUIMode(
@@ -285,6 +422,10 @@ class SamplerAudioEngine {
   /// Démarre l'enregistrement via le microphone du téléphone pour la case `padId`.
   Future<bool> startMicRecording(int padId) async {
     _fallbackMicStartTime = DateTime.now();
+    if (kIsWeb) {
+      final started = await WebAudioBridge.startMicRecording(padId);
+      return started || true;
+    }
     if (!_nativeChannelAvailable) {
       return true;
     }
@@ -310,6 +451,12 @@ class SamplerAudioEngine {
 
   /// Lit l'amplitude instantanée (0.0..1.0) du microphone pour animer le VU-mètre.
   Future<double> getMicAmplitude() async {
+    if (kIsWeb) {
+      final webAmp = WebAudioBridge.getMicAmplitude();
+      if (webAmp > 0.01) {
+        return webAmp.clamp(0.0, 1.0);
+      }
+    }
     if (_nativeChannelAvailable) {
       try {
         final val = await _channel.invokeMethod<double>('getMicAmplitude');
@@ -339,7 +486,9 @@ class SamplerAudioEngine {
     Uint8List? rawWavBytes;
     String? nativePath;
 
-    if (_nativeChannelAvailable) {
+    if (kIsWeb) {
+      rawWavBytes = await WebAudioBridge.stopMicRecording();
+    } else if (_nativeChannelAvailable) {
       try {
         final res =
             await _channel.invokeMapMethod<String, dynamic>('stopMicRecording');
@@ -367,6 +516,31 @@ class SamplerAudioEngine {
       normalize: normalize,
     );
 
+    final label = (customLabel != null && customLabel.trim().isNotEmpty)
+        ? customLabel.trim().toUpperCase()
+        : 'MICRO ${(pad.id + 1).toString().padLeft(2, '0')}';
+
+    if (kIsWeb) {
+      final finalPath =
+          '/web_samples/mic_pad_${pad.id}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      _webMemoryFiles[finalPath] = processed.wavBytes;
+      WebAudioBridge.preloadPad(pad.id, processed.wavBytes);
+      return pad.copyWith(
+        label: label,
+        source: PadSoundSource.microphone,
+        filePath: finalPath,
+        activePlaybackPath: finalPath,
+        originalFileName: 'micro_pad_${pad.id + 1}.wav',
+        clearSynthPreset: true,
+        durationMs: processed.durationMs,
+        waveformPeaks: processed.waveformPeaks,
+        trimStart: 0.0,
+        trimEnd: 1.0,
+        autoTrimSilence: autoTrimSilence,
+        normalizeOnRecord: normalize,
+      );
+    }
+
     final baseDir = await _resolveStorageDir();
     final samplesDir = Directory('${baseDir.path}/samples');
     if (!samplesDir.existsSync()) {
@@ -376,10 +550,6 @@ class SamplerAudioEngine {
     final finalPath = nativePath ??
         '${samplesDir.path}/mic_pad_${pad.id}_${DateTime.now().millisecondsSinceEpoch}.wav';
     File(finalPath).writeAsBytesSync(processed.wavBytes, flush: true);
-
-    final label = (customLabel != null && customLabel.trim().isNotEmpty)
-        ? customLabel.trim().toUpperCase()
-        : 'MICRO ${(pad.id + 1).toString().padLeft(2, '0')}';
 
     final updated = pad.copyWith(
       label: label,
@@ -413,6 +583,18 @@ class SamplerAudioEngine {
 
   /// Ouvre le sélecteur de fichiers de l'appareil pour importer un fichier WAV / audio sur `pad`.
   Future<SamplerPad?> pickAudioFileForPad(SamplerPad pad) async {
+    if (kIsWeb) {
+      final picked = await WebAudioBridge.pickAudioFile(pad.id);
+      if (picked == null) {
+        return null;
+      }
+      return importAudioBytesToPad(
+        pad: pad,
+        fileName: picked.fileName,
+        bytes: picked.bytes,
+      );
+    }
+
     if (!_nativeChannelAvailable) {
       final demo = WavDspService.generatePresetWav(
         SynthPresetKind.values[(pad.id + 4) % SynthPresetKind.values.length],
@@ -455,7 +637,7 @@ class SamplerAudioEngine {
         existingPath: path,
       );
     } on MissingPluginException {
-      // En test widget sans sélecteur Android natif, génère un import WAV de démonstration
+      // En test widget sans sélecteur natif, génère un import WAV de démonstration
       final demo = WavDspService.generatePresetWav(
         SynthPresetKind.values[(pad.id + 4) % SynthPresetKind.values.length],
       );
@@ -475,6 +657,27 @@ class SamplerAudioEngine {
     String? existingPath,
   }) async {
     final analysis = WavDspService.analyzeAudioBytes(bytes);
+    final cleanLabel = _formatFileNameAsPadLabel(fileName, pad.id);
+
+    if (kIsWeb) {
+      final savedPath =
+          '/web_samples/import_pad_${pad.id}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      _webMemoryFiles[savedPath] = analysis.wavBytes;
+      WebAudioBridge.preloadPad(pad.id, analysis.wavBytes);
+      return pad.copyWith(
+        label: cleanLabel,
+        source: PadSoundSource.file,
+        filePath: savedPath,
+        activePlaybackPath: savedPath,
+        originalFileName: fileName,
+        clearSynthPreset: true,
+        durationMs: analysis.durationMs,
+        waveformPeaks: analysis.waveformPeaks,
+        trimStart: 0.0,
+        trimEnd: 1.0,
+      );
+    }
+
     final baseDir = await _resolveStorageDir();
     final samplesDir = Directory('${baseDir.path}/samples');
     if (!samplesDir.existsSync()) {
@@ -486,8 +689,6 @@ class SamplerAudioEngine {
     if (existingPath == null || !File(savedPath).existsSync()) {
       File(savedPath).writeAsBytesSync(analysis.wavBytes, flush: true);
     }
-
-    final cleanLabel = _formatFileNameAsPadLabel(fileName, pad.id);
 
     final updated = pad.copyWith(
       label: cleanLabel,
@@ -522,7 +723,8 @@ class SamplerAudioEngine {
     SamplerPad pad,
     SynthPresetKind preset,
   ) async {
-    final analysis = _presetCache[preset] ?? WavDspService.generatePresetWav(preset);
+    final analysis =
+        _presetCache[preset] ?? WavDspService.generatePresetWav(preset);
     final presetPath = _presetFilePaths[preset];
 
     final updated = pad.copyWith(
@@ -539,7 +741,12 @@ class SamplerAudioEngine {
       chokeGroup: preset.defaultChokeGroup,
     );
 
-    if (presetPath != null) {
+    if (kIsWeb) {
+      WebAudioBridge.preloadPad(updated.id, analysis.wavBytes);
+      return updated;
+    }
+
+    if (presetPath != null && _nativeChannelAvailable) {
       try {
         await _channel.invokeMethod<dynamic>(
           'preloadPadSound',
@@ -565,6 +772,39 @@ class SamplerAudioEngine {
     final sourcePath = pad.filePath ??
         (pad.synthPreset != null ? _presetFilePaths[pad.synthPreset!] : null);
 
+    if (kIsWeb) {
+      final rawBytes = (sourcePath != null ? _webMemoryFiles[sourcePath] : null) ??
+          _resolveWebBytes(pad);
+      if (rawBytes == null) {
+        return pad.copyWith(trimStart: safeStart, trimEnd: safeEnd);
+      }
+      if (safeStart <= 0.005 && safeEnd >= 0.995) {
+        WebAudioBridge.preloadPad(pad.id, rawBytes);
+        return pad.copyWith(
+          trimStart: 0.0,
+          trimEnd: 1.0,
+          activePlaybackPath: sourcePath,
+        );
+      }
+      final slicedBytes = WavDspService.sliceWavBytes(
+        rawBytes,
+        trimStart: safeStart,
+        trimEnd: safeEnd,
+      );
+      if (slicedBytes == null) {
+        return pad.copyWith(trimStart: safeStart, trimEnd: safeEnd);
+      }
+      final trimmedPath =
+          '/web_samples/trimmed_pad_${pad.id}_${DateTime.now().millisecondsSinceEpoch}.wav';
+      _webMemoryFiles[trimmedPath] = slicedBytes;
+      WebAudioBridge.preloadPad(pad.id, slicedBytes);
+      return pad.copyWith(
+        trimStart: safeStart,
+        trimEnd: safeEnd,
+        activePlaybackPath: trimmedPath,
+      );
+    }
+
     if (sourcePath == null || !File(sourcePath).existsSync()) {
       return pad.copyWith(trimStart: safeStart, trimEnd: safeEnd);
     }
@@ -575,15 +815,17 @@ class SamplerAudioEngine {
         trimEnd: 1.0,
         activePlaybackPath: sourcePath,
       );
-      try {
-        await _channel.invokeMethod<dynamic>(
-          'preloadPadSound',
-          <String, dynamic>{
-            'padId': restored.id,
-            'filePath': sourcePath,
-          },
-        );
-      } catch (_) {}
+      if (_nativeChannelAvailable) {
+        try {
+          await _channel.invokeMethod<dynamic>(
+            'preloadPadSound',
+            <String, dynamic>{
+              'padId': restored.id,
+              'filePath': sourcePath,
+            },
+          );
+        } catch (_) {}
+      }
       return restored;
     }
 
@@ -609,21 +851,38 @@ class SamplerAudioEngine {
       activePlaybackPath: trimmedPath,
     );
 
-    try {
-      await _channel.invokeMethod<dynamic>(
-        'preloadPadSound',
-        <String, dynamic>{
-          'padId': updated.id,
-          'filePath': trimmedPath,
-        },
-      );
-    } catch (_) {}
+    if (_nativeChannelAvailable) {
+      try {
+        await _channel.invokeMethod<dynamic>(
+          'preloadPadSound',
+          <String, dynamic>{
+            'padId': updated.id,
+            'filePath': trimmedPath,
+          },
+        );
+      } catch (_) {}
+    }
 
     return updated;
   }
 
-  /// Exporte l'échantillon WAV d'un pad dans le dossier `Music/LifeSampler/` du téléphone.
+  /// Exporte l'échantillon WAV d'un pad sur le téléphone (iPhone Fichiers / Android Music/LifeSampler / Téléchargement Web).
   Future<String> exportPadWavToDevice(SamplerPad pad) async {
+    final safeLabel = pad.label
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    final fileName =
+        'lifesampler_${(pad.id + 1).toString().padLeft(2, '0')}_$safeLabel.wav';
+
+    if (kIsWeb) {
+      final bytes = _resolveWebBytes(pad) ??
+          WavDspService.generatePresetWav(
+            pad.synthPreset ?? SynthPresetKind.kick808,
+          ).wavBytes;
+      return WebAudioBridge.exportPadWav(bytes, fileName);
+    }
+
     final path = resolvePlayablePath(pad);
     Uint8List bytes;
     if (path != null && File(path).existsSync()) {
@@ -634,12 +893,6 @@ class SamplerAudioEngine {
       );
       bytes = fallback.wavBytes;
     }
-
-    final safeLabel = pad.label
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-    final fileName = 'lifesampler_${(pad.id + 1).toString().padLeft(2, '0')}_$safeLabel.wav';
 
     if (_nativeChannelAvailable) {
       try {
@@ -669,12 +922,17 @@ class SamplerAudioEngine {
   /// Sauvegarde l'état des 4 banques sur le stockage persistant de l'application.
   Future<void> saveBanks(List<SamplerBank> banks) async {
     try {
-      final baseDir = await _resolveStorageDir();
-      final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
       final payload = jsonEncode(<String, dynamic>{
         'version': 2,
-        'banks': banks.map((SamplerBank b) => b.toJson()).toList(growable: false),
+        'banks':
+            banks.map((SamplerBank b) => b.toJson()).toList(growable: false),
       });
+      if (kIsWeb) {
+        WebAudioBridge.saveBanksJson(payload);
+        return;
+      }
+      final baseDir = await _resolveStorageDir();
+      final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
       stateFile.writeAsStringSync(payload, flush: true);
     } catch (_) {}
   }
@@ -689,12 +947,19 @@ class SamplerAudioEngine {
     );
 
     try {
-      final baseDir = await _resolveStorageDir();
-      final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
-      if (!stateFile.existsSync()) {
+      String? raw;
+      if (kIsWeb) {
+        raw = WebAudioBridge.loadBanksJson();
+      } else {
+        final baseDir = await _resolveStorageDir();
+        final stateFile = File('${baseDir.path}/lifesampler_banks_v2.json');
+        if (stateFile.existsSync()) {
+          raw = stateFile.readAsStringSync();
+        }
+      }
+      if (raw == null || raw.isEmpty) {
         return defaultBanks;
       }
-      final raw = stateFile.readAsStringSync();
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       final rawBanks = decoded['banks'] as List<dynamic>?;
       if (rawBanks == null || rawBanks.isEmpty) {
@@ -748,7 +1013,8 @@ class SamplerAudioEngine {
       subtitle: 'Banque Studio 808 (16 Sons)',
     );
     final hydratedPadsD = bankD.pads.map((SamplerPad p) {
-      final presetPath = p.synthPreset != null ? _presetFilePaths[p.synthPreset!] : null;
+      final presetPath =
+          p.synthPreset != null ? _presetFilePaths[p.synthPreset!] : null;
       return p.copyWith(
         filePath: presetPath,
         activePlaybackPath: presetPath,
@@ -783,22 +1049,25 @@ class SamplerAudioEngine {
       _storageDir = _customStorageDir;
       return _storageDir!;
     }
-    try {
-      final path = await _channel.invokeMethod<String>('getStorageDir');
-      if (path != null && path.isNotEmpty) {
-        final dir = Directory(path);
-        if (!dir.existsSync()) {
-          dir.createSync(recursive: true);
+    if (_nativeChannelAvailable) {
+      try {
+        final path = await _channel.invokeMethod<String>('getStorageDir');
+        if (path != null && path.isNotEmpty) {
+          final dir = Directory(path);
+          if (!dir.existsSync()) {
+            dir.createSync(recursive: true);
+          }
+          _storageDir = dir;
+          return dir;
         }
-        _storageDir = dir;
-        return dir;
+      } on MissingPluginException {
+        // Fallback
+      } on PlatformException {
+        // Fallback
       }
-    } on MissingPluginException {
-      // Fallback
-    } on PlatformException {
-      // Fallback
     }
-    final fallback = Directory('${Directory.systemTemp.path}/pulsepad16_storage');
+    final fallback =
+        Directory('${Directory.systemTemp.path}/pulsepad16_storage');
     if (!fallback.existsSync()) {
       fallback.createSync(recursive: true);
     }
@@ -822,7 +1091,8 @@ class SamplerAudioEngine {
       final freq = baseFreq * (1.0 + 0.15 * math.sin(t * 16.0));
       phase += 2.0 * math.pi * freq / sampleRate;
       final env = math.sin((i / voiceSamples) * math.pi);
-      final val = (math.sin(phase) * 0.65 + 0.25 * math.sin(phase * 2.0)) * env;
+      final val =
+          (math.sin(phase) * 0.65 + 0.25 * math.sin(phase * 2.0)) * env;
       pcm[silenceSamples + i] = (val * 18000).round().clamp(-32768, 32767);
     }
     return WavDspService.encodePcm16MonoToWav(pcm, sampleRate: sampleRate);

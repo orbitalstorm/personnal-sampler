@@ -5,6 +5,29 @@ Respect strict du versionning `v1.x.y` (numérotation unique, aucun numéro réu
 
 ---
 
+## [v1.3.0] - 2026-10-31 (ORB-34)
+
+### Ajouté & Modifié
+- **Support Natif Complet iPhone / iOS (`ios/` + `AppDelegate.swift`)** :
+  - Génération et configuration du projet Xcode iOS (`ios/Runner.xcworkspace`, `ios/Runner.xcodeproj`) verrouillé en **mode portrait uniquement** (`UIInterfaceOrientationPortrait`) avec icônes iOS opaques haute définition (`AppIcon.appiconset` de `20px` à `1024px`).
+  - Implémentation complète du moteur audio et fichiers natif iOS en Swift (`ios/Runner/AppDelegate.swift`) sur le canal `cloud.orbital8.personnal_sampler/audio` :
+    - **Lecture polyphonique & pitch iOS (`AVAudioPlayer` + `AVAudioSession.Category.playAndRecord`)** : support du mode `CUT` (choke group par pad), `POLY` (jusqu'à 8 voix simultanées par pad), `LOOP` (boucle continue), réglage de vitesse/pitch (`enableRate = true`, `0.50×` à `2.00×`) et gain jusqu'à `150%` avec sortie haut-parleur par défaut (`defaultToSpeaker`) et mixage Bluetooth/AirPods (`allowBluetooth`, `allowBluetoothA2DP`).
+    - **Enregistrement Microphone iOS (`AVAudioRecorder` PCM 16-bit 44.1 kHz Mono)** : demande dynamique de permission `NSMicrophoneUsageDescription`, capture `.wav` native et calcul de crête (`peakMeters` / `averagePower`) en temps réel pour le VU-mètre.
+    - **Import de fichiers audio iOS (`UIDocumentPickerViewController`)** : sélection de fichiers `.wav`, `.mp3`, `.m4a`, `.aac`, `.ogg` depuis l'application **Fichiers (Files)** / iCloud Drive avec copie sécurisée (`startAccessingSecurityScopedResource`).
+    - **Export `.WAV` iOS & Partage AirDrop / Fichiers (`UIActivityViewController` + `UIFileSharingEnabled`)** : sauvegarde dans `Sur mon iPhone > LifeSampler > Exports` et ouverture automatique de la feuille de partage iOS (*Enregistrer dans Fichiers*, *AirDrop*, *Messages*).
+    - **Masquage automatique de la barre Home Indicator iOS** (`prefersHomeIndicatorAutoHidden`) à l'ouverture de la fenêtre `Éditer`.
+- **Support Web / PWA iPhone Safari (`web/` + `WebAudioBridge`)** :
+  - Pont audio Web (`lib/services/web_audio_bridge_web.dart` + `web/index.html`) utilisant `AudioContext`, `MediaRecorder` + encodage PCM 16-bit `.wav` côté client, sélecteur de fichier iOS Safari et téléchargement `.WAV` direct.
+  - Configuration PWA iOS (`apple-mobile-web-app-capable`, `black-translucent`, `viewport-fit=cover`, `manifest.json`) permettant d'installer et tester **LifeSampler** en 1 clic sur iPhone depuis Safari (*Partager > Sur l'écran d'accueil*) sans Mac ni câble.
+- **Pipeline CI/CD GitHub Actions Multi-Plateforme (`.ipa` iOS + Simulator `.app` + PWA Web + `.apk` Android)** :
+  - Job `build-ios` sur `macos-latest` générant automatiquement `lifesampler-v1.3.0-ios.ipa` (installable sur iPhone via **Sideloadly**, **AltStore**, **SideStore** ou **TrollStore**) et `lifesampler-v1.3.0-ios-simulator.zip`.
+  - Job `build-web-pwa` déployant automatiquement la PWA iPhone sur GitHub Pages (`https://orbitalstorm.github.io/personnal-sampler/`) et publiant `lifesampler-v1.3.0-iphone-web-pwa.zip`.
+- **Tests & Captures d'Écran iPhone (`1179×2556` iPhone 16 Pro & `750×1334` iPhone SE)** :
+  - Ajout de tests automatisés vérifiant l'absence de débordement sur les encoches Dynamic Island (`59 pt` top) et Home Indicator (`34 pt` bottom) sur iPhone 16 Pro et iPhone SE.
+  - Génération des captures validées sur iPhone (`screenshots/06_iphone_bank_a_life.png`, `screenshots/07_iphone_edit_pad.png`).
+
+---
+
 ## [v1.2.0] - 2026-10-31 (ORB-33)
 
 ### Ajouté & Modifié
