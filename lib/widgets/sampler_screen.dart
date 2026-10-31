@@ -43,9 +43,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
   /// Pads actuellement en lecture boucle continue (`PadTriggerMode.loop`).
   final Set<int> _loopingPads = <int>{};
 
-  /// Dernier pad déclenché (pour affichage dans le moniteur LCD supérieur).
-  SamplerPad? _lastTriggeredPad;
-
   /// Métronome (uniquement sur la Banque D Studio)
   bool _metronomeActive = false;
   int _bpm = 120;
@@ -69,7 +66,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
     _banks = _engine.buildDefaultBanksSync();
     _activeBankIndex = 0;
     _isLoading = false;
-    _lastTriggeredPad = _banks.first.pads.first;
     unawaited(_initSampler());
   }
 
@@ -84,7 +80,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
       setState(() {
         _banks = loadedBanks;
         _isLoading = false;
-        _lastTriggeredPad = loadedBanks[_activeBankIndex].pads.first;
       });
     }
   }
@@ -109,7 +104,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
         (int idx) => idx == _activeBankIndex ? updatedBank : _banks[idx],
         growable: false,
       );
-      _lastTriggeredPad = updatedPad;
       if (!updatedPad.hasSound || updatedPad.triggerMode != PadTriggerMode.loop) {
         _loopingPads.remove(updatedPad.id);
       }
@@ -135,7 +129,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
         _isRecordingSeq = false;
         _isPlayingSeq = false;
       }
-      _lastTriggeredPad = targetBank.pads.first;
     });
     await _engine.preloadBank(targetBank);
   }
@@ -168,7 +161,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
         (int idx) => idx == _activeBankIndex ? updatedBank : _banks[idx],
         growable: false,
       );
-      _lastTriggeredPad = updatedPad;
     });
 
     _flashTimers[pad.id] = Timer(const Duration(milliseconds: 140), () {
@@ -207,19 +199,24 @@ class _SamplerScreenState extends State<SamplerScreen> {
     SamplerPad pad, {
     required bool openInRecordFocus,
   }) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (BuildContext ctx) {
-        return PadAssignmentSheet(
-          initialPad: pad,
-          audioEngine: _engine,
-          openInRecordFocus: openInRecordFocus,
-          onPadUpdated: _updatePadInCurrentBank,
-        );
-      },
-    );
+    unawaited(_engine.setEditImmersiveMode(true));
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (BuildContext ctx) {
+          return PadAssignmentSheet(
+            initialPad: pad,
+            audioEngine: _engine,
+            openInRecordFocus: openInRecordFocus,
+            onPadUpdated: _updatePadInCurrentBank,
+          );
+        },
+      );
+    } finally {
+      unawaited(_engine.setEditImmersiveMode(false));
+    }
   }
 
   Future<void> _stopAllSounds() async {
@@ -381,22 +378,6 @@ class _SamplerScreenState extends State<SamplerScreen> {
     _seqScheduledTimers.clear();
   }
 
-  Future<void> _resetCurrentBank() async {
-    await _engine.stopAllPads();
-    final freshBanks = _engine.buildDefaultBanksSync();
-    if (!mounted) return;
-    setState(() {
-      _banks = List<SamplerBank>.generate(
-        _banks.length,
-        (int idx) => idx == _activeBankIndex ? freshBanks[idx] : _banks[idx],
-        growable: false,
-      );
-      _loopingPads.clear();
-    });
-    await _engine.saveBanks(_banks);
-    await _engine.preloadBank(_currentBank);
-  }
-
   void _showFeaturesGuideDialog() {
     showDialog<void>(
       context: context,
@@ -433,14 +414,14 @@ class _SamplerScreenState extends State<SamplerScreen> {
                       'Capturez les sons du quotidien (rire de bébé, réplique du boss, porte qui grince) sur 16 pads colorés et rejouez-les à volonté.',
                 ),
                 _FeatureGuideItem(
-                  title: '2. Capture Micro (Auto-Trim & Booster)',
+                  title: '2. Capture Micro & Protection Anti-Effacement',
                   body:
-                      'Touchez une case vide ou appuyez sur RECORD : l’Auto-Trim coupe le silence initial et le Booster égalise le volume.',
+                      'Après le 1er enregistrement d’un pad, l’interrupteur anti-effacement est activé par défaut dans Éditer pour éviter d’écraser ou vider le son par erreur.',
                 ),
                 _FeatureGuideItem(
                   title: '3. Découpe Waveform & Export WAV',
                   body:
-                      'Dans la fenêtre Éditer, découpez la forme d’onde, réglez le pitch/volume et exportez votre son en .WAV dans Music/LifeSampler.',
+                      'Dans la fenêtre Éditer plein écran, découpez la forme d’onde, réglez le pitch/volume et exportez votre son en .WAV dans Music/LifeSampler.',
                 ),
                 _FeatureGuideItem(
                   title: '4. Banque D Studio & BPM Global',
@@ -516,7 +497,7 @@ class _SamplerScreenState extends State<SamplerScreen> {
   Widget build(BuildContext context) {
     if (_isLoading || _banks.isEmpty) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0B0D14),
+        backgroundColor: Colors.black,
         body: Center(
           child: CircularProgressIndicator(color: Color(0xFF10B981)),
         ),
@@ -526,15 +507,15 @@ class _SamplerScreenState extends State<SamplerScreen> {
     final bank = _currentBank;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0B0D14),
+      backgroundColor: Colors.black,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 1. EN-TÊTE LIFESAMPLER & MONITEUR D'ACTIVITÉ
-              _buildTopHeader(bank),
+              // 1. EN-TÊTE ÉPURÉ SUR FOND NOIR (LOGO + TITRE COLORÉ À GAUCHE, PICTO INFO DISCRET À DROITE)
+              _buildTopHeader(),
               const SizedBox(height: 6),
 
               // 2. SÉLECTEUR DES 4 BANQUES (A / B / C : VIE • D : STUDIO)
@@ -568,107 +549,66 @@ class _SamplerScreenState extends State<SamplerScreen> {
     );
   }
 
-  Widget _buildTopHeader(SamplerBank bank) {
-    final lastPad = _lastTriggeredPad;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: const Color(0xFF131724),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
+  /// En-tête épuré sans encadré sur fond noir :
+  /// - Logo + titre coloré aligné à gauche ;
+  /// - Aucun autre texte ou statistique ;
+  /// - Uniquement le picto information discret en haut à droite.
+  Widget _buildTopHeader() {
+    return Padding(
+      key: const Key('lifesampler_top_header'),
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
           GestureDetector(
+            key: const Key('lifesampler_header_brand'),
             onTap: widget.onShowSplash,
-            child: Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: <Color>[Color(0xFF10B981), Color(0xFF38BDF8)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: const Icon(
-                Icons.mic_external_on_rounded,
-                color: Color(0xFF06130E),
-                size: 20,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    const Flexible(
-                      child: Text(
-                        'LIFESAMPLER',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: <Color>[Color(0xFF10B981), Color(0xFF38BDF8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: bank.isStudioBank
-                            ? const Color(0xFFA855F7).withValues(alpha: 0.22)
-                            : const Color(0xFF10B981).withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        bank.isStudioBank
-                            ? 'STUDIO • ${bank.assignedCount}/16'
-                            : 'VIE • ${bank.assignedCount}/16',
-                        style: TextStyle(
-                          color: bank.isStudioBank
-                              ? const Color(0xFFD8B4FE)
-                              : const Color(0xFF6EE7B7),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                  ],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.mic_external_on_rounded,
+                    color: Color(0xFF04100C),
+                    size: 18,
+                  ),
                 ),
-                Text(
-                  lastPad != null && lastPad.hasSound
-                      ? '${lastPad.padNumberLabel} • ${lastPad.label} • ${lastPad.effectiveDurationMs} ms'
-                      : bank.subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white60,
-                    fontSize: 11,
+                const SizedBox(width: 9),
+                ShaderMask(
+                  shaderCallback: (Rect bounds) => const LinearGradient(
+                    colors: <Color>[
+                      Color(0xFF10B981),
+                      Color(0xFF38BDF8),
+                      Color(0xFFF59E0B),
+                    ],
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                  ).createShader(bounds),
+                  blendMode: BlendMode.srcIn,
+                  child: const Text(
+                    'LIFESAMPLER',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Color(0xFF10B981),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 16,
+                      letterSpacing: 1.0,
+                    ),
                   ),
                 ),
               ],
-            ),
-          ),
-          IconButton(
-            key: const Key('reset_bank_button'),
-            onPressed: _resetCurrentBank,
-            tooltip: 'Réinitialiser la banque',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(
-              Icons.restore_rounded,
-              color: Colors.white60,
-              size: 19,
             ),
           ),
           IconButton(
@@ -676,9 +616,11 @@ class _SamplerScreenState extends State<SamplerScreen> {
             onPressed: _showFeaturesGuideDialog,
             tooltip: 'Guide LifeSampler',
             visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             icon: const Icon(
               Icons.info_outline_rounded,
-              color: Colors.white70,
+              color: Colors.white54,
               size: 19,
             ),
           ),

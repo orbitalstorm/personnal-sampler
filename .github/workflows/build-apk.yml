@@ -43,18 +43,18 @@ jobs:
 
       - name: Copy APK with versioned names
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/lifesampler-v1.1.0.apk
-          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/personnal-sampler-v1.1.0.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk
           ls -lh build/app/outputs/flutter-apk/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lifesampler-v1.1.0-apk
+          name: lifesampler-v1.2.0-apk
           path: |
             build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/flutter-apk/lifesampler-v1.1.0.apk
-            build/app/outputs/flutter-apk/personnal-sampler-v1.1.0.apk
+            build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk
+            build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release on Tag
@@ -64,7 +64,7 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF#refs/tags/}"
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.1.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.1.0.apk --clobber
+            gh release upload "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk --clobber
           else
-            gh release create "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.1.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.1.0.apk --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME" --generate-notes
+            gh release create "$TAG_NAME" build/app/outputs/flutter-apk/lifesampler-v1.2.0.apk build/app/outputs/flutter-apk/personnal-sampler-v1.2.0.apk --title "LifeSampler — Enregistreur Bruiteur de la Vie $TAG_NAME" --generate-notes
           fi

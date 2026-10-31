@@ -252,6 +252,36 @@ class SamplerAudioEngine {
     }
   }
 
+  /// Masque ou ré-affiche la barre de navigation système Android (boutons Home / Retour / Récents)
+  /// pendant l'ouverture de l'écran Éditer afin qu'elle ne masque jamais le bouton de validation.
+  Future<void> setEditImmersiveMode(bool enabled) async {
+    try {
+      if (enabled) {
+        await SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.immersiveSticky,
+          overlays: const <SystemUiOverlay>[SystemUiOverlay.top],
+        );
+      } else {
+        await SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: SystemUiOverlay.values,
+        );
+      }
+    } catch (_) {}
+
+    if (!_nativeChannelAvailable) return;
+    try {
+      await _channel.invokeMethod<dynamic>(
+        'setEditImmersiveMode',
+        <String, dynamic>{'enabled': enabled},
+      );
+    } on MissingPluginException {
+      _nativeChannelAvailable = false;
+    } on PlatformException {
+      // Ignoré
+    }
+  }
+
   /// Démarre l'enregistrement via le microphone du téléphone pour la case `padId`.
   Future<bool> startMicRecording(int padId) async {
     _fallbackMicStartTime = DateTime.now();

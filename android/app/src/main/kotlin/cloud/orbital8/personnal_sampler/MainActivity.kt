@@ -191,6 +191,12 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "setEditImmersiveMode" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        setEditImmersiveModeInternal(enabled)
+                        result.success(true)
+                    }
+
                     else -> result.notImplemented()
                 }
             }
@@ -655,6 +661,36 @@ class MainActivity : FlutterActivity() {
                 stream.flush()
             }
             return outFile.absolutePath
+        }
+    }
+
+    private fun setEditImmersiveModeInternal(enabled: Boolean) {
+        runOnUiThread {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    window.insetsController?.let { controller ->
+                        if (enabled) {
+                            controller.hide(android.view.WindowInsets.Type.navigationBars())
+                            controller.systemBarsBehavior =
+                                android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                        } else {
+                            controller.show(android.view.WindowInsets.Type.navigationBars())
+                        }
+                    }
+                }
+                @Suppress("DEPRECATION")
+                if (enabled) {
+                    window.decorView.systemUiVisibility = (
+                        android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    )
+                } else {
+                    window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 

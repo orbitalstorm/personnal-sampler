@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personnal_sampler/main.dart';
 import 'package:personnal_sampler/models/sampler_models.dart';
@@ -152,10 +152,14 @@ void main() {
         await tester.pumpAndSettle();
 
         // 2. Vérifier l'écran principal sur la Banque A (Sons de la vie) :
-        //    - Titre LIFESAMPLER
+        //    - En-tête épuré sans encadré (Logo + Titre LIFESAMPLER à gauche, picto info discret à droite, aucune statistique)
         //    - 16 cases présentes
         //    - Pas de console BPM global sur la Banque A
+        expect(find.byKey(const Key('lifesampler_top_header')), findsOneWidget);
+        expect(find.byKey(const Key('lifesampler_header_brand')), findsOneWidget);
         expect(find.text('LIFESAMPLER'), findsOneWidget);
+        expect(find.byKey(const Key('features_help_button')), findsOneWidget);
+        expect(find.byKey(const Key('reset_bank_button')), findsNothing);
         for (var i = 0; i < 16; i++) {
           expect(find.byKey(Key('sampler_pad_$i')), findsOneWidget);
         }
@@ -165,6 +169,11 @@ void main() {
         await tester.tap(find.byKey(const Key('sampler_pad_0')));
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('pad_assignment_sheet')), findsOneWidget);
+
+        // Sur une case vide (avant le 1er enregistrement), l'interrupteur anti-effacement est désactivé
+        final switchFinder = find.byKey(const Key('erase_protection_switch'));
+        expect(switchFinder, findsOneWidget);
+        expect(tester.widget<Switch>(switchFinder).value, isFalse);
 
         // Vérifier que les pré-réglages Studio 808 ne sont PAS dans la fenêtre Éditer
         expect(find.text('KICK 808'), findsNothing);
@@ -183,6 +192,9 @@ void main() {
         await tester.tap(find.byKey(const Key('mic_record_toggle_button')));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
+
+        // Dès le 1er enregistrement terminé, l'interrupteur anti-effacement s'active automatiquement
+        expect(tester.widget<Switch>(switchFinder).value, isTrue);
 
         // Exporter le son directement depuis la fenêtre Éditer
         final exportBtn = find.byKey(const Key('export_pad_wav_button'));
@@ -205,7 +217,49 @@ void main() {
         await tester.pump(const Duration(milliseconds: 160));
         expect(find.text('×2'), findsOneWidget);
 
-        // 4. Basculer sur la Banque D (Studio) et vérifier que les 16 sons Studio 808
+        // 4. Rouvrir le menu Éditer sur la case 0 après son 1er enregistrement :
+        //    Vérifier que l'interrupteur contre l'effacement est ACTIVÉ PAR DÉFAUT
+        //    et qu'il bloque les boutons MICRO, FICHIER AUDIO et VIDER.
+        await tester.tap(find.byKey(const Key('edit_mode_button')));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('sampler_pad_0')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('pad_assignment_sheet')), findsOneWidget);
+        expect(tester.widget<Switch>(switchFinder).value, isTrue);
+
+        final micBtnLocked = tester.widget<ElevatedButton>(
+          find.byKey(const Key('mic_record_toggle_button')),
+        );
+        final importBtnLocked = tester.widget<ElevatedButton>(
+          find.byKey(const Key('import_wav_file_button')),
+        );
+        final clearBtnLocked = tester.widget<OutlinedButton>(
+          find.byKey(const Key('clear_pad_button')),
+        );
+        expect(micBtnLocked.onPressed, isNull);
+        expect(importBtnLocked.onPressed, isNull);
+        expect(clearBtnLocked.onPressed, isNull);
+
+        // Désactiver l'interrupteur anti-effacement déverrouille Enregistrer et Vider
+        await tester.tap(switchFinder);
+        await tester.pump();
+        expect(tester.widget<Switch>(switchFinder).value, isFalse);
+
+        final micBtnUnlocked = tester.widget<ElevatedButton>(
+          find.byKey(const Key('mic_record_toggle_button')),
+        );
+        final clearBtnUnlocked = tester.widget<OutlinedButton>(
+          find.byKey(const Key('clear_pad_button')),
+        );
+        expect(micBtnUnlocked.onPressed, isNotNull);
+        expect(clearBtnUnlocked.onPressed, isNotNull);
+
+        // Fermer la fenêtre Éditer
+        await tester.tap(find.byKey(const Key('save_pad_assignment_button')));
+        await tester.pumpAndSettle();
+
+        // 5. Basculer sur la Banque D (Studio) et vérifier que les 16 sons Studio 808
         //    ainsi que le BPM global s'affichent uniquement sur la Banque D
         await tester.tap(find.byKey(const Key('bank_chip_D')));
         await tester.pumpAndSettle();

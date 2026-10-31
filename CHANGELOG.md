@@ -5,6 +5,23 @@ Respect strict du versionning `v1.x.y` (numérotation unique, aucun numéro réu
 
 ---
 
+## [v1.2.0] - 2026-10-31 (ORB-33)
+
+### Ajouté & Modifié
+- **Mode Immersif sur l'Écran « Éditer » (Masquage des boutons système Android)** :
+  - Activation automatique du mode immersif (`SystemUiMode.immersiveSticky` + `WindowInsetsController.hide(navigationBars())` natif dans `MainActivity.kt`) à l'ouverture de la fenêtre `Éditer` (`PadAssignmentSheet`) afin de masquer les boutons de navigation Android (*Retour, Accueil, Récents*) et éviter qu'ils ne recouvrent le bouton `VALIDER LA CASE` / `VALIDER`.
+  - Ajout d'une marge de sécurité inférieure dynamique (`viewPadding.bottom`) garantissant le dégagement complet du bouton de validation.
+- **Nouvel En-Tête Épuré sur Fond Noir** :
+  - Remplacement de l'encadré supérieur par un **logo + titre `LIFESAMPLER` coloré aligné à gauche**, directement sur **fond noir sans encadré ni bordure**.
+  - Suppression de tous les textes secondaires, compteurs et statistiques dans l'en-tête.
+  - Conservation uniquement du **picto information (`i`) discret en haut à droite**.
+- **Interrupteur de Protection Contre l'Effacement dans « Éditer »** :
+  - Ajout d'un interrupteur **`Protection anti-effacement`** (`erase_protection_switch`) dans la fenêtre `Éditer`.
+  - **Activé par défaut** dès qu'on ouvre le menu `Éditer` après le premier enregistrement d'un pad (ainsi qu'automatiquement à la fin d'une première prise).
+  - Lorsqu'il est actif, **impossible d'enregistrer** (`MICRO` et `FICHIER AUDIO` verrouillés) **ou de vider** (`VIDER` verrouillé) la case, tout en permettant l'écoute, la découpe `Trim`, le réglage `Volume`/`Pitch`/`Mode`/`Nom`/`Couleur` et l'export `.WAV`.
+
+---
+
 ## [v1.1.0] - 2026-10-30 (ORB-32)
 
 ### Ajouté & Modifié
