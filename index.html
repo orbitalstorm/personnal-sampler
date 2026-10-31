@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <base href="/personnal-sampler/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="LifeSampler — L'enregistreur bruiteur de la vie 16 cases (4x4) pour iPhone & Android.">
+  <meta name="theme-color" content="#0B0D14">
+
+  <!-- iOS / iPhone PWA meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LifeSampler">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>LifeSampler — Bruiteur de la Vie (iPhone &amp; iOS)</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body bgcolor="#0B0D14">
+  <script>
+    (function () {
+      const SAMPLE_RATE = 44100;
+      let audioCtx = null;
+      const decodedBuffers = new Map();
+      const activeSources = new Map();
+      const loopingPads = new Set();
+      const padChokeGroups = new Map();
+
+      let micStream = null;
+      let micSourceNode = null;
+      let micProcessorNode = null;
+      let micRecordedChunks = [];
+      let currentMicPeak = 0.0;
+      let isRecordingMic = false;
+
+      function ensureAudioContext() {
+        if (!audioCtx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) {
+            audioCtx = new Ctx();
+          }
+        }
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(function () {});
+        }
+        return audioCtx;
+      }
+
+      // Déverrouillage automatique de l'AudioContext sur iOS Safari dès le 1er toucher
+      ['touchstart', 'touchend', 'pointerdown', 'click'].forEach(function (evt) {
+        window.addEventListener(evt, function () {
+          ensureAudioContext();
+        }, { passive: true });
+      });
+
+      function encodePcm16ToWavBytes(pcmInt16, sampleRate) {
+        const dataLen = pcmInt16.length * 2;
+        const buffer = new ArrayBuffer(44 + dataLen);
+        const view = new DataView(buffer);
+
+        function writeStr(offset, str) {
+          for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+          }
+        }
+
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataLen, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataLen, true);
+
+        for (let i = 0; i < pcmInt16.length; i++) {
+          view.setInt16(44 + i * 2, pcmInt16[i], true);
+        }
+        return new Uint8Array(buffer);
+      }
+
+      function parseWavBytesToAudioBuffer(ctx, wavBytes) {
+        if (!wavBytes || wavBytes.length < 44) return null;
+        const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
+        let sampleRate = SAMPLE_RATE;
+        let numChannels = 1;
+        let bitsPerSample = 16;
+        let dataOffset = 44;
+        let dataSize = wavBytes.byteLength - 44;
+
+        let offset = 12;
+        while (offset + 8 <= wavBytes.byteLength) {
+          const c0 = wavBytes[offset];
+          const c1 = wavBytes[offset + 1];
+          const c2 = wavBytes[offset + 2];
+          const c3 = wavBytes[offset + 3];
+          const chunkSize = view.getUint32(offset + 4, true);
+          const chunkStart = offset + 8;
+          if (c0 === 0x66 && c1 === 0x6D && c2 === 0x74 && c3 === 0x20 && chunkStart + 16 <= wavBytes.byteLength) {
+            numChannels = Math.max(1, view.getUint16(chunkStart + 2, true));
+            sampleRate = Math.max(8000, view.getUint32(chunkStart + 4, true));
+            bitsPerSample = view.getUint16(chunkStart + 14, true);
+          } else if (c0 === 0x64 && c1 === 0x61 && c2 === 0x74 && c3 === 0x61) {
+            dataOffset = chunkStart;
+            dataSize = Math.min(chunkSize, wavBytes.byteLength - chunkStart);
+            break;
+          }
+          offset = chunkStart + chunkSize + (chunkSize % 2);
+        }
+
+        const bytesPerSample = Math.max(1, Math.floor(bitsPerSample / 8));
+        const frameSize = bytesPerSample * numChannels;
+        const frameCount = Math.floor(dataSize / frameSize);
+        if (frameCount <= 0) return null;
+
+        const audioBuffer = ctx.createBuffer(1, frameCount, sampleRate);
+        const channelData = audioBuffer.getChannelData(0);
+        for (let i = 0; i < frameCount; i++) {
+          const pos = dataOffset + i * frameSize;
+          if (pos + 2 <= wavBytes.byteLength && bitsPerSample === 16) {
+            channelData[i] = view.getInt16(pos, true) / 32768.0;
+          } else {
+            channelData[i] = 0;
+          }
+        }
+        return audioBuffer;
+      }
+
+      function stopPadInternal(padId) {
+        loopingPads.delete(padId);
+        const list = activeSources.get(padId);
+        if (list) {
+          list.forEach(function (src) {
+            try { src.stop(0); } catch (_) {}
+            try { src.disconnect(); } catch (_) {}
+          });
+          activeSources.delete(padId);
+        }
+      }
+
+      function playPadBuffer(ctx, padId, audioBuffer, volume, pitch, isLoop) {
+        if (!audioBuffer) return;
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.loop = Boolean(isLoop);
+        src.playbackRate.value = Math.max(0.5, Math.min(2.0, pitch || 1.0));
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = Math.max(0.0, Math.min(1.5, volume !== undefined ? volume : 1.0));
+
+        src.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        const list = activeSources.get(padId) || [];
+        list.push(src);
+        activeSources.set(padId, list);
+
+        src.onended = function () {
+          const current = activeSources.get(padId);
+          if (current) {
+            const idx = current.indexOf(src);
+            if (idx >= 0) current.splice(idx, 1);
+          }
+          if (!isLoop) {
+            loopingPads.delete(padId);
+          }
+        };
+
+        src.start(0);
+      }
+
+      window.LifeSamplerWebBridge = {
+        preloadPad: function (padId, wavBytes) {
+          const ctx = ensureAudioContext();
+          if (!ctx || !wavBytes) return;
+          const buf = parseWavBytesToAudioBuffer(ctx, wavBytes);
+          if (buf) {
+            decodedBuffers.set(padId, buf);
+          }
+        },
+
+        triggerPad: function (padId, wavBytes, volume, pitch, mode, chokeGroup) {
+          const ctx = ensureAudioContext();
+          if (!ctx) return mode === 'loop';
+
+          if (chokeGroup > 0) {
+            padChokeGroups.set(padId, chokeGroup);
+            padChokeGroups.forEach(function (grp, otherId) {
+              if (grp === chokeGroup && otherId !== padId) {
+                stopPadInternal(otherId);
+              }
+            });
+          } else {
+            padChokeGroups.delete(padId);
+          }
+
+          let buf = parseWavBytesToAudioBuffer(ctx, wavBytes) || decodedBuffers.get(padId);
+          if (buf) {
+            decodedBuffers.set(padId, buf);
+          }
+
+          if (mode === 'loop') {
+            if (loopingPads.has(padId)) {
+              stopPadInternal(padId);
+              return false;
+            }
+            stopPadInternal(padId);
+            loopingPads.add(padId);
+            playPadBuffer(ctx, padId, buf, volume, pitch, true);
+            return true;
+          }
+
+          if (mode === 'retrigger') {
+            stopPadInternal(padId);
+          }
+
+          playPadBuffer(ctx, padId, buf, volume, pitch, false);
+          return false;
+        },
+
+        stopPad: function (padId) {
+          stopPadInternal(padId);
+        },
+
+        stopAllPads: function () {
+          loopingPads.clear();
+          Array.from(activeSources.keys()).forEach(function (id) {
+            stopPadInternal(id);
+          });
+        },
+
+        startMicRecording: async function (padId) {
+          try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+              return false;
+            }
+            const ctx = ensureAudioContext();
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micRecordedChunks = [];
+            currentMicPeak = 0.0;
+            isRecordingMic = true;
+
+            micSourceNode = ctx.createMediaStreamSource(micStream);
+            micProcessorNode = ctx.createScriptProcessor(2048, 1, 1);
+            micProcessorNode.onaudioprocess = function (e) {
+              if (!isRecordingMic) return;
+              const input = e.inputBuffer.getChannelData(0);
+              const copy = new Float32Array(input.length);
+              let maxPeak = 0.0;
+              for (let i = 0; i < input.length; i++) {
+                const s = input[i];
+                copy[i] = s;
+                const a = Math.abs(s);
+                if (a > maxPeak) maxPeak = a;
+              }
+              currentMicPeak = Math.min(1.0, maxPeak * 1.35);
+              micRecordedChunks.push(copy);
+            };
+            micSourceNode.connect(micProcessorNode);
+            micProcessorNode.connect(ctx.destination);
+            return true;
+          } catch (_) {
+            return false;
+          }
+        },
+
+        getMicAmplitude: function () {
+          return isRecordingMic ? currentMicPeak : 0.0;
+        },
+
+        stopMicRecording: async function () {
+          isRecordingMic = false;
+          currentMicPeak = 0.0;
+          try {
+            if (micProcessorNode) micProcessorNode.disconnect();
+            if (micSourceNode) micSourceNode.disconnect();
+            if (micStream) {
+              micStream.getTracks().forEach(function (t) { t.stop(); });
+            }
+          } catch (_) {}
+          micProcessorNode = null;
+          micSourceNode = null;
+          micStream = null;
+
+          if (!micRecordedChunks || micRecordedChunks.length === 0) {
+            return null;
+          }
+
+          const ctx = ensureAudioContext();
+          const inRate = (ctx && ctx.sampleRate) ? Math.round(ctx.sampleRate) : SAMPLE_RATE;
+          let totalLen = 0;
+          for (let i = 0; i < micRecordedChunks.length; i++) {
+            totalLen += micRecordedChunks[i].length;
+          }
+          const pcm = new Int16Array(totalLen);
+          let offset = 0;
+          for (let i = 0; i < micRecordedChunks.length; i++) {
+            const chunk = micRecordedChunks[i];
+            for (let j = 0; j < chunk.length; j++) {
+              const s = Math.max(-1.0, Math.min(1.0, chunk[j]));
+              pcm[offset++] = Math.round(s * 32767);
+            }
+          }
+          micRecordedChunks = [];
+          return encodePcm16ToWavBytes(pcm, inRate);
+        },
+
+        pickAudioFile: function (padId) {
+          return new Promise(function (resolve) {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'audio/*,.wav,.mp3,.m4a,.aac,.ogg';
+            input.onchange = async function () {
+              const file = input.files && input.files[0];
+              if (!file) {
+                resolve(null);
+                return;
+              }
+              try {
+                const arrayBuf = await file.arrayBuffer();
+                const ctx = ensureAudioContext();
+                if (ctx) {
+                  try {
+                    const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+                    const ch0 = decoded.getChannelData(0);
+                    const pcm = new Int16Array(ch0.length);
+                    for (let i = 0; i < ch0.length; i++) {
+                      const s = Math.max(-1.0, Math.min(1.0, ch0[i]));
+                      pcm[i] = Math.round(s * 32767);
+                    }
+                    const wavBytes = encodePcm16ToWavBytes(pcm, Math.round(decoded.sampleRate));
+                    resolve({ fileName: file.name, bytes: wavBytes });
+                    return;
+                  } catch (_) {}
+                }
+                resolve({ fileName: file.name, bytes: new Uint8Array(arrayBuf) });
+              } catch (_) {
+                resolve(null);
+              }
+            };
+            input.oncancel = function () {
+              resolve(null);
+            };
+            input.click();
+          });
+        },
+
+        getPickedFileName: function (pickedObj) {
+          return (pickedObj && pickedObj.fileName) ? String(pickedObj.fileName) : 'sample.wav';
+        },
+
+        getPickedFileBytes: function (pickedObj) {
+          return (pickedObj && pickedObj.bytes) ? pickedObj.bytes : new Uint8Array(0);
+        },
+
+        exportPadWav: function (wavBytes, fileName) {
+          const cleanName = String(fileName || 'lifesampler_pad.wav');
+          try {
+            const blob = new Blob([wavBytes], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = cleanName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+          } catch (_) {}
+          return 'Fichiers iPhone / Téléchargements > ' + cleanName;
+        },
+
+        saveBanksJson: function (jsonStr) {
+          try {
+            window.localStorage.setItem('lifesampler_banks_v2', String(jsonStr));
+          } catch (_) {}
+        },
+
+        loadBanksJson: function () {
+          try {
+            return window.localStorage.getItem('lifesampler_banks_v2');
+          } catch (_) {
+            return null;
+          }
+        }
+      };
+    })();
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
